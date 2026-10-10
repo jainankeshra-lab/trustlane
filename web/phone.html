@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrustLane · Phone</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  main { max-width: 480px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 10px 0; }
+  .total { font-size: 22px; font-weight: 700; }
+  .aisles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .aisles button.on { background: var(--green); color: #fff; border-color: var(--green); }
+  .products { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .products button { text-align: left; display: flex; flex-direction: column; gap: 2px; }
+  .nudge { background: var(--amber-soft); border: 1px solid var(--amber); border-radius: 14px; padding: 12px; }
+  .banner { background: var(--blue-soft); border-radius: 12px; padding: 10px 12px; }
+  .banner.warn { background: var(--amber-soft); }
+  .line { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .line:last-child { border-bottom: 0; }
+  .big { font-size: 20px; font-weight: 700; }
+  .qr { background: #fff; border-radius: 14px; padding: 12px; display: flex; justify-content: center; }
+  .qr svg { width: 100%; max-width: 300px; height: auto; }
+  video { width: 100%; border-radius: 12px; background: #000; }
+  textarea { width: 100%; font: inherit; padding: 8px; border-radius: 10px; border: 1px solid var(--line); }
+  .view[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <!-- Start: privacy notice and consent -->
+  <section class="view stack" id="v-start">
+    <span class="eyebrow">TrustLane · Scan &amp; Go</span>
+    <h1 style="font-size:30px">Scan as you shop. Walk straight out.</h1>
+    <p class="muted" style="margin:0" id="pay-explainer">Scan the QR code at the entrance to start. You pay when you leave.</p>
+    <div class="card stack small">
+      <b>Before you start: how this store checks baskets</b>
+      <span>Shelf cameras look at the shelf front and hands only. They never record faces, and video stays on the shelf device.</span>
+      <span>Shelves record which product was taken and when. Your phone tells us which aisle you're in, so a pick can be matched to your scan.</span>
+      <span>Checks use what happened on this trip only, never who you are or how you look. You can dispute any check from the app.</span>
+      <span>Trip records are kept for 90 days for audit, under India's DPDP Act 2023.</span>
+      <label><input type="checkbox" id="consent"> I understand and agree</label>
+    </div>
+    <button class="primary" id="start" disabled>Scan entry QR · start trip</button>
+    <p class="muted small" style="margin:0" id="pay-mode">Prototype: payments run in test mode, no money moves.</p>
+  </section>
+
+  <!-- Shopping -->
+  <section class="view stack" id="v-shop" hidden>
+    <header class="spread">
+      <div><div class="muted small">Your cart <span class="mono" id="sid"></span></div><div class="total num" id="total">₹0.00</div></div>
+      <span class="small muted"><span class="dot" id="live"></span> live</span>
+    </header>
+
+    <div id="queue-banner" class="banner warn small" hidden></div>
+    <div id="id-banner" class="banner warn small" hidden>An item in your cart is age-restricted. Please show your ID to a team member before you leave.</div>
+    <div id="nudges" class="stack"></div>
+
+    <div class="card stack">
+      <div class="spread"><h2>Where are you?</h2><span class="chip info">Simulated aisle beacon</span></div>
+      <div class="aisles" id="aisles"></div>
+      <div class="small muted" id="loc-status"></div>
+      <div class="small muted">Bluetooth ID (rotates every 30 s): <span class="mono" id="eid"></span>
+        <br>The store's shelves listen for this ID. A browser can't broadcast it; the native app would.</div>
+    </div>
+
+    <div class="card stack">
+      <div class="spread"><h2>Scan an item</h2><button class="ghost small" id="camera-btn" hidden>Use camera</button></div>
+      <video id="video" playsinline muted hidden></video>
+      <p class="muted small" style="margin:0" id="scan-hint">Tap a product to scan its barcode.</p>
+      <div class="products" id="products"></div>
+      <label class="small muted">Package check (demo control)
+        <select id="package" style="width:100%;margin-top:4px"></select>
+      </label>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:6px">Cart</h2>
+      <div id="lines"><p class="muted small" style="margin:0">Nothing scanned yet.</p></div>
+    </div>
+
+    <button class="primary" id="to-exit">Go to exit</button>
+  </section>
+
+  <!-- At the exit -->
+  <section class="view stack" id="v-exit" hidden>
+    <span class="eyebrow">Exit</span>
+    <h1>Show this code at the gate scanner</h1>
+    <div class="qr" id="qr"></div>
+    <div class="card stack">
+      <div class="spread"><span class="muted">Total</span><span class="big num" id="exit-total"></span></div>
+      <div class="muted small" id="exit-items"></div>
+    </div>
+    <button class="primary" id="tap">Or tap your phone at gate G1 (NFC)</button>
+    <button id="resume">Back to shopping</button>
+    <p class="muted small" style="margin:0" id="exit-status"></p>
+  </section>
+
+  <!-- Confirm (amber) -->
+  <section class="view stack" id="v-confirm" hidden>
+    <span class="eyebrow">Quick check</span>
+    <h1>Did you take these?</h1>
+    <p class="muted" style="margin:0">The shelf recorded these items but we didn't see a scan. Add anything you have.</p>
+    <div class="card stack" id="confirm-list"></div>
+    <button class="primary" id="confirm-send">Confirm and pay</button>
+  </section>
+
+  <!-- Staff (red or ID check) -->
+  <section class="view stack" id="v-staff" hidden>
+    <span class="eyebrow">Almost done</span>
+    <h1 id="staff-text">A team member will be with you in a moment.</h1>
+    <p class="muted" style="margin:0">They'll check a couple of things with you, then you're on your way.</p>
+    <div class="card stack dispute"></div>
+  </section>
+
+  <!-- Approve payment (gateway checkout) -->
+  <section class="view stack" id="v-pay" hidden>
+    <span class="eyebrow">Gate check passed</span>
+    <h1>Approve your payment to open the gate</h1>
+    <div class="card stack">
+      <div class="spread"><span class="muted">Total</span><span class="big num" id="pay-total"></span></div>
+      <div class="muted small" id="pay-order"></div>
+    </div>
+    <button class="primary" id="pay-open">Pay with UPI</button>
+    <p class="small banner" style="margin:0">
+      <b>Test mode:</b> choose UPI and enter <span class="mono">success@razorpay</span>
+      (or <span class="mono">failure@razorpay</span> to see a failed payment). No money moves.</p>
+    <p class="muted small" style="margin:0" id="pay-status"></p>
+  </section>
+
+  <!-- Payment failed -->
+  <section class="view stack" id="v-payfail" hidden>
+    <span class="eyebrow">Payment</span>
+    <h1>Your payment didn't go through</h1>
+    <p class="muted" style="margin:0" id="payfail-text"></p>
+    <button class="primary" id="pay-again">Try again</button>
+  </section>
+
+  <!-- Receipt -->
+  <section class="view stack" id="v-receipt" hidden>
+    <span class="eyebrow">Paid · gate open</span>
+    <h1>Thanks for shopping!</h1>
+    <div class="card stack">
+      <div id="receipt-lines"></div>
+      <div class="spread"><span class="muted">Total charged</span><span class="big num" id="receipt-total"></span></div>
+      <div class="muted small mono" id="receipt-ref"></div>
+    </div>
+    <div class="card stack dispute"></div>
+    <button id="new-trip">Start a new trip</button>
+  </section>
+</main>
+
+<script src="/static/common.js"></script>
+<script src="/static/sha256.js"></script>
+<script>
+const GATE = "G1";
+let shopper = TL.load("tl.shopper", null);      // { shopper_id, shopper_secret } issued by the server
+let S = TL.load("tl.session", null);            // { sid, key, seq, aisle }
+let queue = TL.load("tl.queue", []);            // scans signed while offline, sent in order later
+let catalog = [];
+let token = null;
+let confirmItems = [];
+let locationFreshS = 45;
+const nudges = new Map();
+const $ = (id) => document.getElementById(id);
+
+function show(view) { document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== "v-" + view)); }
+function persist() { TL.save("tl.session", S); TL.save("tl.queue", queue); }
+
+// Every trip request is signed with the trip key: X-Trip-Auth = ts.HMAC(key, METHOD|path|ts)
+function tripHeaders(method, path) {
+  const ts = Date.now();
+  return { "X-Trip-Auth": `${ts}.${TLCrypto.hmacHex(S.key, `${method}|${path}|${ts}`)}` };
+}
+function trip(sub, body, method) {
+  const path = `/api/sessions/${S.sid}${sub}`;
+  const m = method || (body === undefined ? "GET" : "POST");
+  return TL.api(path, body, m, tripHeaders(m, path));
+}
+function eid() { return TLCrypto.hmacHex(S.key, `eid|${Math.floor(Date.now() / 1000 / 30)}`).slice(0, 16); }
+
+// ---------- rendering
+const STATUS = { verified: "Verified ✓", scanned: "Scanned", weighing: "Weighing…", flagged: "Check", removed: "Removed", refunded: "Refunded" };
+function renderCart(cart) {
+  $("total").textContent = TL.rupees(cart.total);
+  $("sid").textContent = cart.session_id;
+  $("id-banner").hidden = !cart.needs_id;
+  $("lines").innerHTML = cart.lines.length ? cart.lines.map((ln) => `
+    <div class="line">
+      <div><div>${TL.esc(ln.name)}</div>${ln.note ? `<div class="small muted">${TL.esc(ln.note)}</div>` : ""}</div>
+      <div style="text-align:right"><div class="num">${ln.status === "weighing" ? "–" : TL.rupees(ln.price)}</div>
+        <span class="chip ${ln.status === "weighing" ? "info" : ln.status === "refunded" ? "removed" : ln.status}">${STATUS[ln.status]}</span></div>
+    </div>`).join("") : `<p class="muted small" style="margin:0">Nothing scanned yet.</p>`;
+  $("exit-total").textContent = TL.rupees(cart.total);
+  $("exit-items").textContent = `${cart.items} item${cart.items === 1 ? "" : "s"}`;
+}
+
+function renderQueue() {
+  $("queue-banner").hidden = !queue.length;
+  $("queue-banner").textContent = `${queue.length} scan${queue.length === 1 ? "" : "s"} saved on your phone while offline. They'll sync automatically.`;
+}
+
+function renderNudges() {
+  $("nudges").innerHTML = [...nudges.entries()].map(([key, n]) => `
+    <div class="nudge stack">
+      <div><b>Oops!</b> ${TL.esc(n.text)}</div>
+      <div class="row">
+        ${n.sku ? `<button class="primary small" data-scan="${TL.esc(n.sku)}">Scan it now</button>` : ""}
+        <button class="ghost small" data-dismiss="${TL.esc(key)}">Dismiss</button>
+      </div>
+    </div>`).join("");
+}
+
+function renderAisles() {
+  const aisles = [...new Set(catalog.map((p) => p.aisle))].sort((a, b) => a - b);
+  $("aisles").innerHTML = ["Entry", ...aisles].map((a) =>
+    `<button data-aisle="${a}" class="${S && S.aisle === a ? "on" : ""}">${a === "Entry" ? a : "Aisle " + a}</button>`).join("");
+}
+
+function renderProducts() {
+  $("products").innerHTML = catalog.map((p) => `
+    <button data-barcode="${p.barcode}">
+      <span>${TL.esc(p.name)}</span>
+      <span class="small muted">${TL.rupees(p.price)}${p.sold_by === "weight" ? "/kg" : ""} · aisle ${p.aisle}${p.age_restricted ? " · ID" : ""}</span>
+    </button>`).join("");
+  $("package").innerHTML = `<option value="">Package matches the barcode</option>` +
+    catalog.map((p) => `<option value="${p.sku}">Holding: ${TL.esc(p.name)}</option>`).join("");
+}
+
+function renderDispute() {
+  document.querySelectorAll(".dispute").forEach((el) => {
+    el.innerHTML = `<b>Something not right?</b>
+      <textarea rows="2" placeholder="Tell us what happened"></textarea>
+      <button class="small">Send to the store team</button>`;
+    el.querySelector("button").onclick = async () => {
+      const text = el.querySelector("textarea").value;
+      try { await trip("/disputes", { text }); el.innerHTML = `<span class="muted small">Sent. A team member will review it.</span>`; }
+      catch (e) { TL.toast(e.message, "bad"); }
+    };
+  });
+}
+
+// ---------- actions
+async function start() {
+  const { data } = await TL.api("/api/sessions", { consent: true, ...(shopper || {}) });
+  if (data.shopper) { shopper = data.shopper; TL.save("tl.shopper", shopper); }
+  S = { sid: data.session_id, key: data.key, seq: 0, aisle: "Entry" };
+  queue = [];
+  persist();
+  enterShop();
+  sendLocation();
+}
+
+function enterShop() {
+  show("shop");
+  renderAisles();
+  renderQueue();
+  connect();
+  refresh();
+}
+
+async function refresh() {
+  if (!S) return;
+  try {
+    const { data } = await trip("");
+    renderCart(data);
+    if (data.state === "exited" && data.receipt) showReceipt(data.receipt);
+    if (data.state === "paying" && !payRequest) {  // reopened mid-payment: ask for it again
+      payRequest = {};
+      trip("/pay", {}).catch(() => (payRequest = null));
+    }
+  } catch (e) {
+    if (e.status === 404 || e.status === 401) { S = null; persist(); show("start"); }
+  }
+}
+
+let lastLocationTs = 0;
+async function sendLocation() {
+  if (!S || !S.aisle) return;
+  try { await trip("/location", { aisle: S.aisle }); lastLocationTs = Date.now(); } catch { /* retried in 15 s */ }
+}
+async function setAisle(aisle) {
+  S.aisle = aisle;
+  persist();
+  renderAisles();
+  sendLocation();
+}
+
+function signScan(barcode, packageLabel) {
+  S.seq += 1;
+  persist();
+  const ts = Date.now();
+  return { seq: S.seq, barcode, ts, sig: TLCrypto.hmacHex(S.key, `${S.sid}|${S.seq}|${barcode}|${ts}`),
+           package_label: packageLabel, package_confidence: packageLabel ? 0.93 : null };
+}
+
+async function postScan(body) {
+  const res = await fetch(`/api/sessions/${S.sid}/scans`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.detail || res.statusText), { status: res.status });
+  return { status: res.status, data };
+}
+
+async function scan(barcode) {
+  const packageLabel = $("package").value || null;
+  $("package").value = "";
+  const body = signScan(barcode, packageLabel);
+  if (queue.length) { queue.push(body); persist(); renderQueue(); return flushQueue(); }  // keep the order
+  try {
+    const res = await postScan(body);
+    if (res.status === 202) TL.toast("Saved. The store is offline, so it will sync shortly.");
+    else {
+      renderCart(res.data.cart);
+      const ln = res.data.line;
+      TL.toast(ln.status === "flagged" ? `${ln.name} scanned, please check the message above`
+        : ln.status === "weighing" ? `${ln.name}: put it in the produce bag, the shelf weighs it` : `${ln.name} added`);
+    }
+  } catch (e) {
+    if (e instanceof TypeError) {  // no connection at all: keep the signed scan on the phone
+      queue.push(body); persist(); renderQueue();
+      TL.toast("No connection. Scan saved on your phone.");
+    } else TL.toast(e.message, "bad");
+  }
+}
+
+let flushing = false;
+async function flushQueue() {
+  if (flushing || !queue.length || !S) return queue.length === 0;
+  flushing = true;
+  try {
+    while (queue.length) {
+      try { await postScan({ ...queue[0], offline: true }); }
+      catch (e) {
+        if (e instanceof TypeError) return false;  // still offline
+        TL.toast(`A saved scan was refused: ${e.message}`, "bad");
+      }
+      queue.shift(); persist(); renderQueue();
+    }
+    refresh();
+    return true;
+  } finally { flushing = false; }
+}
+
+async function toExit() {
+  if (queue.length && !(await flushQueue())) return TL.toast("Some scans are still saved offline. Move to where there's signal and try again.", "bad");
+  try {
+    const { data } = await trip("/checkout", {});
+    token = data.token;
+    $("qr").innerHTML = data.qr_svg;
+    $("exit-status").textContent = "";
+    show("exit");
+  } catch (e) { TL.toast(e.message, "bad"); }
+}
+
+async function tap() {
+  $("exit-status").textContent = "Checking…";
+  try {
+    const { data } = await TL.api(`/api/gate/${GATE}/tap`, { token });
+    if (data.mode === "offline") $("exit-status").textContent = "Store is offline: the gate checked your signed token locally.";
+  } catch (e) { $("exit-status").textContent = e.message; }
+}
+
+function showConfirm(items) {
+  confirmItems = items;
+  $("confirm-list").innerHTML = items.map((it) => `
+    <div class="stack" style="gap:6px">
+      <div class="spread"><b>${TL.esc(it.name)}</b><span class="num">${TL.rupees(it.price)}</span></div>
+      <div class="row">
+        <label><input type="radio" name="c-${it.pick_id}" value="take" checked> I have it, add it</label>
+        <label><input type="radio" name="c-${it.pick_id}" value="deny"> I didn't take it</label>
+      </div>
+    </div>`).join("");
+  show("confirm");
+}
+
+async function sendConfirm() {
+  const take = [], deny = [];
+  confirmItems.forEach((it) => {
+    const choice = document.querySelector(`input[name="c-${it.pick_id}"]:checked`).value;
+    (choice === "take" ? take : deny).push(it.pick_id);
+  });
+  try { await trip("/confirm", { take, deny }); } catch (e) { TL.toast(e.message, "bad"); }
+}
+
+function showReceipt(r) {
+  $("receipt-lines").innerHTML = r.items.map((ln) =>
+    `<div class="line"><span>${TL.esc(ln.name)}</span><span class="num">${TL.rupees(ln.price)}</span></div>`).join("") ||
+    `<p class="muted small" style="margin:0">No items.</p>`;
+  $("receipt-total").textContent = TL.rupees(r.total);
+  const refunds = (r.refunds || []).reduce((sum, x) => sum + x.amount, 0);
+  $("receipt-ref").textContent = [r.payment_id, r.provider, r.method, r.vpa, `${r.mode} mode`].filter(Boolean).join(" · ")
+    + (refunds ? ` · refunded ${TL.rupees(refunds)}` : "");
+  show("receipt");
+}
+
+// ---------- gateway checkout (Razorpay, test mode)
+let payRequest = null;
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) return resolve();
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("Couldn't load the payment page. Check the phone's internet connection."));
+    document.head.appendChild(s);
+  });
+}
+function showPay(req) {
+  payRequest = req;
+  $("pay-total").textContent = TL.rupees(req.amount);
+  $("pay-order").textContent = `Order ${req.order_id}`;
+  $("pay-status").textContent = "";
+  show("pay");
+  openCheckout();
+}
+async function openCheckout() {
+  const req = payRequest;
+  try { await loadScript("https://checkout.razorpay.com/v1/checkout.js"); }
+  catch (e) { $("pay-status").textContent = e.message; return; }
+  const rzp = new Razorpay({
+    key: req.key, order_id: req.order_id, amount: req.amount, currency: req.currency, name: req.name,
+    description: `Trip ${req.session_id}`, theme: { color: "#17765A" },
+    handler: async (resp) => {
+      $("pay-status").textContent = "Confirming with the bank…";
+      try { await trip("/payment/razorpay", resp); } catch (e) { $("pay-status").textContent = e.message; }
+    },
+    modal: { ondismiss: () => { $("pay-status").textContent = "Payment not finished. Tap Pay with UPI to try again."; } },
+  });
+  rzp.on("payment.failed", (r) => { $("pay-status").textContent = `Payment failed: ${r.error.description}. Try again.`; });
+  rzp.open();
+}
+
+// ---------- live updates (the socket is authenticated with the trip key too)
+let connected = false;
+function connect() {
+  if (connected || !S) return;
+  connected = true;
+  const channel = `phone:${S.sid}`;
+  TL.socket(channel, (msg) => {
+    const d = msg.data;
+    if (msg.kind === "cart") renderCart(d);
+    else if (msg.kind === "nudge") {
+      nudges.set(d.pick_id || d.sku || String(Date.now()), d);
+      renderNudges();
+      if (navigator.vibrate) navigator.vibrate(150);
+    } else if (msg.kind === "resolved") {
+      for (const [k, n] of nudges) if (n.pick_id === d.pick_id || (!n.pick_id && n.sku === d.sku)) nudges.delete(k);
+      renderNudges();
+    } else if (msg.kind === "info") TL.toast(d.text);
+    else if (msg.kind === "confirm") showConfirm(d.items);
+    else if (msg.kind === "staff") { $("staff-text").textContent = d.text; show("staff"); }
+    else if (msg.kind === "pay") showPay(d);
+    else if (msg.kind === "payment_failed") { $("payfail-text").textContent = d.text; show("payfail"); }
+    else if (msg.kind === "receipt") showReceipt(d);
+  }, (on) => { $("live").classList.toggle("on", on); if (on) flushQueue(); }, () => {
+    const ts = Date.now();
+    return { auth: `${ts}.${TLCrypto.hmacHex(S.key, `WS|/ws/${channel}|${ts}`)}` };
+  });
+}
+
+// ---------- camera scanning (needs https or localhost and a browser with BarcodeDetector)
+async function startCamera() {
+  const video = $("video");
+  try {
+    const detector = new BarcodeDetector({ formats: ["ean_13", "code_128", "qr_code"] });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = stream;
+    video.hidden = false;
+    await video.play();
+    let last = "";
+    const loop = async () => {
+      if (video.hidden) return;
+      const codes = await detector.detect(video).catch(() => []);
+      const code = codes[0] && codes[0].rawValue;
+      if (code && code !== last) { last = code; scan(code); setTimeout(() => (last = ""), 2500); }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  } catch (e) { TL.toast("Camera not available: " + e.message, "bad"); }
+}
+
+// ---------- wiring
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.aisle) setAisle(t.dataset.aisle);
+  else if (t.dataset.barcode) scan(t.dataset.barcode);
+  else if (t.dataset.scan) { const p = catalog.find((x) => x.sku === t.dataset.scan); if (p) scan(p.barcode); }
+  else if (t.dataset.dismiss) { nudges.delete(t.dataset.dismiss); renderNudges(); }
+});
+$("consent").onchange = (e) => ($("start").disabled = !e.target.checked);
+$("start").onclick = () => start().catch((e) => TL.toast(e.message, "bad"));
+$("to-exit").onclick = toExit;
+$("tap").onclick = tap;
+$("resume").onclick = async () => { await trip("/resume", {}); show("shop"); };
+$("confirm-send").onclick = sendConfirm;
+$("pay-again").onclick = () => trip("/pay", {}).catch((e) => TL.toast(e.message, "bad"));
+$("pay-open").onclick = () => (payRequest && payRequest.order_id ? openCheckout() : null);
+$("new-trip").onclick = () => { S = null; queue = []; persist(); location.reload(); };
+$("camera-btn").onclick = startCamera;
+if ("BarcodeDetector" in window && window.isSecureContext && navigator.mediaDevices) {
+  $("camera-btn").hidden = false;
+  $("scan-hint").textContent = "Tap a product, or use the camera to scan a real barcode.";
+}
+
+(async () => {
+  const cfg = (await TL.api("/api/config")).data;
+  locationFreshS = cfg.location_fresh_s;
+  if (cfg.payments.provider === "razorpay") {
+    $("pay-explainer").textContent = "Scan the QR code at the entrance to start. At the exit gate you approve one UPI payment.";
+    $("pay-mode").textContent = "Prototype: Razorpay in test mode, no money moves.";
+  } else {
+    $("pay-explainer").textContent = "Scan the QR code at the entrance to start. You're charged automatically when you leave.";
+    $("pay-mode").textContent = "Prototype: built-in sandbox payments, no money moves.";
+  }
+  catalog = (await TL.api("/api/catalog")).data;
+  renderProducts();
+  renderDispute();
+  if (S) enterShop(); else show("start");
+  setInterval(refresh, 4000);
+  setInterval(sendLocation, 15000);   // keep the aisle fresh: a silent phone becomes a suspect
+  setInterval(flushQueue, 5000);
+  setInterval(() => {
+    if (!S) return;
+    $("eid").textContent = eid();
+    const age = lastLocationTs ? Math.round((Date.now() - lastLocationTs) / 1000) : null;
+    $("loc-status").textContent = age === null ? "Location not sent yet" :
+      `Location sent ${age} s ago${age > locationFreshS ? " (stale: the store can't see where you are)" : ""}`;
+  }, 1000);
+})();
+</script>
+</body>
+</html>

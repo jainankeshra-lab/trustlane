@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrustLane · Ops console</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  main { max-width: 1320px; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 16px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .kpi .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi .l { font-size: 12px; color: var(--muted); }
+  .cols { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: start; }
+  .alert { padding: 8px 12px; border-radius: 10px; border-left: 5px solid var(--muted); background: var(--chip); }
+  .alert.warn { border-color: var(--amber); background: var(--amber-soft); }
+  .alert.bad { border-color: var(--red); background: var(--red-soft); }
+  .alert.info { border-color: var(--blue); background: var(--blue-soft); }
+  .check { border: 2px solid var(--red); border-radius: 14px; padding: 14px; background: var(--card); }
+  .check.id { border-color: var(--amber); }
+  .feed { max-height: 420px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+  .feed div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+  ul { margin: 0; padding-left: 18px; }
+  tr.click { cursor: pointer; } tr.click:hover { background: var(--chip); }
+  dialog { border: 1px solid var(--line); border-radius: 16px; padding: 0; width: min(720px, 94vw); background: var(--bg); color: var(--ink); }
+  dialog::backdrop { background: rgba(16,32,27,.35); }
+  dialog .inner { padding: 18px; display: flex; flex-direction: column; gap: 12px; max-height: 84vh; overflow: auto; }
+  input[type=text] { font: inherit; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="spread">
+    <div><span class="eyebrow" style="color:var(--blue)">Monitoring &amp; ops</span><h1>TrustLane store console</h1></div>
+    <div class="row">
+      <span class="small muted"><span class="dot" id="live"></span> live</span>
+      <input type="text" id="find" placeholder="Trip id, e.g. T3F9A…" size="14">
+      <button id="find-btn">Open trip</button>
+      <button id="network"></button>
+      <button id="verify">Verify audit log</button>
+      <a class="small" href="/metrics" target="_blank" rel="noopener">/metrics</a>
+    </div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+  <div class="stack" id="alerts"></div>
+
+  <div class="cols">
+    <div class="stack">
+      <div class="card stack">
+        <div class="spread"><h2>Staff checks</h2><span class="muted small">Red trips and ID checks wait here</span></div>
+        <div class="stack" id="checks"></div>
+      </div>
+      <div class="card stack">
+        <h2>ID checks in the aisle</h2>
+        <div class="stack small" id="ids"></div>
+      </div>
+      <div class="card stack">
+        <h2>Disputes</h2>
+        <div class="stack small" id="disputes"></div>
+      </div>
+      <div class="card stack">
+        <div class="spread"><h2>Trips in store</h2><span class="muted small">Click a trip for details and staff actions</span></div>
+        <table><thead><tr><th>Trip</th><th>State</th><th>Location</th><th class="num">Cart</th><th class="num">Risk</th></tr></thead>
+          <tbody id="trips"></tbody></table>
+      </div>
+      <div class="card stack">
+        <h2>Shelf stations</h2>
+        <table><thead><tr><th>Station</th><th>Shelf</th><th>Last report</th><th>Health</th><th>Status</th></tr></thead>
+          <tbody id="stations"></tbody></table>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card stack">
+        <div class="spread"><h2>Live events</h2><span class="muted small" id="ledger"></span></div>
+        <div class="feed small" id="feed"></div>
+      </div>
+      <div class="card stack">
+        <div class="spread"><h2>Alerts delivered</h2><span class="muted small" id="targets"></span></div>
+        <div class="stack small" id="sent"></div>
+      </div>
+      <div class="card stack">
+        <div class="spread"><h2>Stock &amp; catalog</h2><a class="small" href="#" id="sales">Download sales CSV</a></div>
+        <table class="small"><thead><tr><th>Product</th><th class="num">Stock</th><th class="num">Price</th><th class="num">Learned weight</th></tr></thead>
+          <tbody id="stock"></tbody></table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<dialog id="trip"><div class="inner" id="trip-body"></div></dialog>
+
+<script src="/static/common.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let last = null;
+const pct = (v) => (v === null || v === undefined ? "–" : Math.round(v * 100) + "%");
+
+function render(s) {
+  last = s;
+  const tiles = [
+    ["Shoppers in store", s.active_shoppers],
+    ["Pick-to-scan match rate", pct(s.match_rate)],
+    ["Nudges per pick", pct(s.nudge_rate)],
+    ["Open discrepancies", s.open_discrepancies],
+    ["Exits green / amber / red", `${s.exits.green} / ${s.exits.amber} / ${s.exits.red}`],
+    ["Red checks cleared", pct(s.red_cleared_ratio)],
+    ["Shelf latency p95", s.latency_p95_s === null ? "–" : s.latency_p95_s.toFixed(2) + " s"],
+    ["Payments ok / failed", `${s.payments.ok} / ${s.payments.failed}`],
+    ["Camera agrees with weight", pct(s.vision.agreement_rate)],
+    ["Bluetooth presence", s.presence_active ? "on" : "off"],
+  ];
+  $("kpis").innerHTML = tiles.map(([l, v]) => `<div class="card kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+  $("alerts").innerHTML = s.alerts.map((a) => `<div class="alert ${a.level}">${TL.esc(a.text)}</div>`).join("");
+  $("network").textContent = s.cloud_online ? "Cloud online · switch offline" : `Cloud offline (${s.buffered_events} buffered) · reconnect`;
+  $("network").className = s.cloud_online ? "" : "danger";
+  $("ledger").textContent = `${s.ledger_events} audit events · match window ${s.match_window_s} s${s.mqtt ? " · MQTT on" : ""}`;
+  $("targets").textContent = s.alert_targets.length ? "to " + s.alert_targets.join(" + ") : "no Slack/webhook set: console only";
+
+  const checksKey = s.checks.map((c) => c.session_id + ":" + c.kind + ":" + c.points).join("|");
+  if (checksKey !== renderedChecks) { renderedChecks = checksKey; renderChecks(s.checks); }
+  const dKey = s.disputes.map((d) => d.dispute_id).join("|") + "#" + s.id_needed.join("|");
+  if (dKey !== renderedDisputes) { renderedDisputes = dKey; renderDisputes(s); }
+
+  $("trips").innerHTML = s.sessions.map((t) => `<tr class="click" data-trip="${t.session_id}"><td class="mono">${t.session_id}</td>
+    <td>${t.state.replace("_", " ")}${t.needs_id ? ' <span class="chip warn">ID</span>' : ""}</td>
+    <td>${t.detected ? `aisle ${t.detected} <span class="chip ok">detected</span>` : t.aisle ? `aisle ${t.aisle} <span class="chip">reported ${t.location_age_s}s</span>` : '<span class="chip bad">silent</span>'}</td>
+    <td class="num">${TL.rupees(t.total)}</td><td class="num">${t.risk}</td></tr>`).join("") ||
+    `<tr><td colspan="5" class="muted">No shoppers in store.</td></tr>`;
+  $("stations").innerHTML = s.stations.map((st) => {
+    const drift = (st.lanes || []).map((l) => Math.abs(l.drift_g || 0)).reduce((a, b) => Math.max(a, b), 0);
+    return `<tr><td class="mono">${st.station_id}</td><td>${st.shelf_id}</td><td>${st.age_s.toFixed(0)} s ago</td>
+      <td class="small">${st.camera_fps != null ? st.camera_fps + " fps · " : ""}drift ${drift.toFixed(1)} g${st.outbox ? " · " + st.outbox + " queued" : ""}${st.battery_pct != null ? " · " + st.battery_pct + "%" : ""}</td>
+      <td><span class="chip ${st.ok ? "ok" : "bad"}">${st.ok ? "Reporting" : "Silent: shelf unverified"}</span></td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="muted">No station has reported yet.</td></tr>`;
+  $("feed").innerHTML = s.feed.map((f) => `<div><span class="muted">${TL.clock(f.ts)}</span>
+    <span class="chip ${f.level === "warn" ? "warn" : f.level === "bad" ? "bad" : ""}">${TL.esc(f.kind)}</span>
+    ${f.session_id ? `<span class="mono">${f.session_id}</span>` : ""} ${TL.esc(f.text)}</div>`).join("");
+  $("sent").innerHTML = s.alerts_sent.slice().reverse().map((a) => `<div><span class="muted">${TL.clock(a.ts)}</span>
+    <span class="chip ${a.state === "resolved" ? "ok" : a.level}">${a.state}</span> ${TL.esc(a.text)}</div>`).join("") ||
+    `<span class="muted">Nothing paged yet.</span>`;
+}
+
+let renderedChecks = null;
+function renderChecks(checks) {
+  $("checks").innerHTML = checks.length ? checks.map((c) => c.kind === "id" ? `
+    <div class="check id stack" data-sid="${c.session_id}">
+      <div class="spread"><b>Trip ${c.session_id}</b><span class="chip warn">ID check</span></div>
+      <div class="small">Age-restricted items: ${c.cart.lines.filter((l) => l.age_restricted && l.status !== "removed").map((l) => TL.esc(l.name)).join(", ")}</div>
+      <div class="row"><button class="primary" data-resolve="id_verified">ID checked · continue</button>
+        <button data-resolve="id_refused">No valid ID · remove items</button></div>
+    </div>` : `
+    <div class="check stack" data-sid="${c.session_id}">
+      <div class="spread"><b>Trip ${c.session_id}</b><span class="chip red">Red · ${c.points} pts</span></div>
+      <ul class="small">${c.reasons.map((r) => `<li>${TL.esc(r)}</li>`).join("")}</ul>
+      ${c.unresolved.length ? `<div class="small"><b>Shelf saw, not scanned:</b><br>${c.unresolved.map((u) =>
+        `<label><input type="checkbox" value="${u.pick_id}" checked> ${TL.esc(u.name)} · ${TL.rupees(u.price)}</label>`).join("<br>")}</div>` : ""}
+      <div class="small muted">Cart: ${c.cart.items} items · ${TL.rupees(c.cart.total)}</div>
+      <div class="row">
+        <button class="primary" data-resolve="items_added">Add ticked items &amp; charge</button>
+        <button data-resolve="cleared">Nothing wrong · clear</button>
+      </div>
+    </div>`).join("") : `<p class="muted small" style="margin:0">No open checks.</p>`;
+}
+
+let renderedDisputes = null;
+function renderDisputes(s) {
+  $("ids").innerHTML = s.id_needed.length ? s.id_needed.map((sid) => `<div class="spread"><span>Trip <span class="mono">${sid}</span> has age-restricted items</span>
+    <button class="small" data-verify="${sid}">ID checked</button></div>`).join("") : `<span class="muted">Nobody needs an ID check.</span>`;
+  $("disputes").innerHTML = s.disputes.length ? s.disputes.map((d) => `<div class="stack" style="gap:6px;border-bottom:1px dashed var(--line);padding-bottom:8px">
+    <div><b>${d.dispute_id}</b> · trip <a href="#" data-trip="${d.session_id}" class="mono">${d.session_id}</a> · ${TL.clock(d.ts)}</div>
+    <div>"${TL.esc(d.text)}"</div>
+    <div class="row"><button class="small primary" data-dispute="${d.dispute_id}" data-outcome="upheld">Uphold</button>
+      <button class="small" data-dispute="${d.dispute_id}" data-outcome="rejected">Reject</button>
+      <span class="muted">Refunds: open the trip</span></div></div>`).join("") : `<span class="muted">No open disputes.</span>`;
+}
+
+async function renderStock() {
+  try {
+    const rows = (await TL.staffApi("/api/erp/stock")).data;
+    const learned = (last && last.learned_weights) || {};
+    $("stock").innerHTML = rows.map((r) => `<tr><td>${TL.esc(r.name)}</td><td class="num">${r.stock} ${r.unit === "kg" ? "kg" : ""}</td>
+      <td class="num">${TL.rupees(r.price)}${r.unit === "kg" ? "/kg" : ""}</td>
+      <td class="num">${learned[r.sku] ? learned[r.sku].mean + " g (" + learned[r.sku].n + ")" : "–"}</td></tr>`).join("");
+  } catch { /* PIN prompt pending */ }
+}
+
+// ---------- trip detail and staff actions
+async function openTrip(sid) {
+  let t;
+  try { t = (await TL.staffApi(`/api/ops/trips/${encodeURIComponent(sid)}`)).data; }
+  catch (e) { return TL.toast(e.message, "bad"); }
+  const open = t.assessment.unresolved;
+  const paid = t.state === "exited";
+  $("trip-body").innerHTML = `
+    <div class="spread"><h2>Trip <span class="mono">${t.session_id}</span></h2><button id="close-dialog">Close</button></div>
+    <div class="row small"><span class="chip">${t.state.replace("_", " ")}</span>
+      <span>Risk ${t.assessment.points} → ${t.assessment.decision}</span>
+      <span>Location: reported ${t.location.reported ?? "–"}${t.location.reported_age_s != null ? ` (${t.location.reported_age_s}s ago)` : ""},
+        detected ${t.location.detected ?? "–"}${t.location.detected_age_s != null ? ` (${t.location.detected_age_s}s ago)` : ""}</span>
+      ${t.needs_id ? '<span class="chip warn">ID needed</span>' : ""}</div>
+    ${t.assessment.reasons.length ? `<ul class="small">${t.assessment.reasons.map((r) => `<li>${TL.esc(r)}</li>`).join("")}</ul>` : ""}
+    <h3>Cart</h3>
+    <div class="small">${t.lines.map((l) => `<label style="display:block"><input type="checkbox" class="line" value="${l.line_id}" ${paid && !["removed", "refunded"].includes(l.status) ? "" : "disabled"}>
+      ${TL.esc(l.name)} · ${TL.rupees(l.price)} <span class="chip ${l.status}">${l.status}</span></label>`).join("") || '<span class="muted">Empty</span>'}</div>
+    ${open.length ? `<h3>Shelf saw, not scanned</h3><div class="small">${open.map((u) =>
+      `<label style="display:block"><input type="checkbox" class="pick" value="${u.pick_id}" checked> ${TL.esc(u.name)} · ${TL.rupees(u.price)}${u.shared ? " (shared)" : ""}</label>`).join("")}</div>` : ""}
+    ${t.receipt ? `<div class="small muted">Paid ${TL.rupees(t.receipt.total)} via ${t.receipt.provider} · ${t.receipt.payment_id || ""}
+      ${(t.receipt.refunds || []).map((r) => ` · refunded ${TL.rupees(r.amount)}`).join("")}</div>` : ""}
+    <div class="row">
+      ${paid ? `<input type="text" id="refund-reason" placeholder="Refund reason"><button class="primary" id="do-refund">Refund ticked items</button>` : `
+        <button class="primary" id="do-close">Close at staff desk (add ticked, take payment)</button>
+        <button id="do-cancel">Cancel trip (nothing bought)</button>
+        ${t.needs_id ? '<button id="do-id">ID checked</button>' : ""}`}
+    </div>`;
+  const dlg = $("trip");
+  if (!dlg.open) dlg.showModal();
+  const act = async (path, body) => {
+    try { await TL.staffApi(path, body); TL.toast("Done"); openTrip(sid); refresh(); }
+    catch (e) { TL.toast(e.message, "bad"); }
+  };
+  $("close-dialog").onclick = () => dlg.close();
+  const ticked = (cls) => [...$("trip-body").querySelectorAll(`input.${cls}:checked`)].map((i) => i.value);
+  if ($("do-refund")) $("do-refund").onclick = () => act(`/api/ops/trips/${sid}/refund`, { line_ids: ticked("line"), reason: $("refund-reason").value });
+  if ($("do-close")) $("do-close").onclick = () => act(`/api/ops/trips/${sid}/close`, { take: ticked("pick") });
+  if ($("do-cancel")) $("do-cancel").onclick = () => act(`/api/ops/trips/${sid}/cancel`, {});
+  if ($("do-id")) $("do-id").onclick = () => act(`/api/ops/trips/${sid}/verify-id`, {});
+}
+
+async function refresh() {
+  try { render((await TL.staffApi("/api/ops/summary")).data); } catch { /* wrong PIN or server restarting */ }
+}
+
+document.addEventListener("click", async (e) => {
+  const tripEl = e.target.closest("[data-trip]");
+  if (tripEl) { e.preventDefault(); return openTrip(tripEl.dataset.trip); }
+  const b = e.target.closest("button");
+  if (!b) return;
+  try {
+    if (b.id === "network") {
+      const { data } = await TL.staffApi("/api/ops/network", { online: !last.cloud_online });
+      TL.toast(data.online ? `Cloud back online · ${data.replayed} buffered events replayed` : "Cloud offline · gateway buffering");
+    } else if (b.id === "verify") {
+      const { data } = await TL.staffApi("/api/ops/ledger/verify");
+      TL.toast(data.intact ? `Audit log intact (${data.events} events)` : "Audit log chain is BROKEN", data.intact ? "" : "bad");
+    } else if (b.id === "find-btn") {
+      if ($("find").value.trim()) openTrip($("find").value.trim().toUpperCase());
+    } else if (b.dataset.resolve) {
+      const card = b.closest("[data-sid]");
+      const take = [...card.querySelectorAll("input:checked")].map((i) => i.value);
+      await TL.staffApi(`/api/ops/checks/${card.dataset.sid}/resolve`, { outcome: b.dataset.resolve, take: b.dataset.resolve === "items_added" ? take : [] });
+    } else if (b.dataset.verify) {
+      await TL.staffApi(`/api/ops/trips/${b.dataset.verify}/verify-id`, {});
+    } else if (b.dataset.dispute) {
+      const note = (window.prompt && window.prompt("Note for the shopper")) || "";
+      await TL.staffApi(`/api/ops/disputes/${b.dataset.dispute}/resolve`, { outcome: b.dataset.outcome, note, refund_lines: [] });
+    }
+  } catch (err) { TL.toast(err.message, "bad"); }
+  refresh();
+});
+$("sales").onclick = async (e) => {
+  e.preventDefault();
+  const res = await fetch("/api/erp/sales.csv", { headers: { "X-Staff-Pin": TL.staffPin() } });
+  const url = URL.createObjectURL(await res.blob());
+  Object.assign(document.createElement("a"), { href: url, download: "trustlane-sales.csv" }).click();
+};
+
+TL.staffPin();
+TL.socket("ops", () => refresh(), (on) => $("live").classList.toggle("on", on), () => ({ pin: TL.staffPin() }));
+refresh();
+renderStock();
+setInterval(refresh, 2000);
+setInterval(renderStock, 10000);
+</script>
+</body>
+</html>

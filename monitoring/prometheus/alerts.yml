@@ -1,0 +1,75 @@
+# The deck's monitoring table as Prometheus alert rules. The server also evaluates these itself and
+# pages Slack/webhooks (TRUSTLANE_SLACK_WEBHOOK / TRUSTLANE_ALERT_WEBHOOK), so Alertmanager is optional.
+groups:
+  - name: trustlane
+    rules:
+      - alert: TrustLaneServerDown
+        expr: up{job="trustlane"} == 0
+        for: 1m
+        labels: {severity: page}
+        annotations: {summary: "TrustLane server is not answering /metrics"}
+
+      - alert: ShelfStationSilent
+        expr: time() - trustlane_station_last_seen_seconds > 120
+        labels: {severity: page}
+        annotations: {summary: "Shelf station {{ $labels.station }} silent for 2 min: its shelf is unverified"}
+
+      - alert: ShelfLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(trustlane_shelf_event_latency_seconds_bucket[10m]))) > 2
+        for: 5m
+        labels: {severity: page}
+        annotations: {summary: "Shelf-to-server latency p95 above 2 s: check store Wi-Fi and the gateway"}
+
+      - alert: PickScanMatchRateLow
+        expr: >
+          sum(increase(trustlane_pick_scan_matches_total[15m]))
+          / clamp_min(sum(increase(trustlane_shelf_picks_total{attributed="true"}[15m])), 1) < 0.95
+          and sum(increase(trustlane_shelf_picks_total{attributed="true"}[15m])) >= 5
+        labels: {severity: warn}
+        annotations: {summary: "Pick-to-scan match rate below 95% for 15 min: check camera angle and product data"}
+
+      - alert: NudgeSpike
+        expr: >
+          (sum(increase(trustlane_nudges_total[15m])) / clamp_min(sum(increase(trustlane_shelf_picks_total[15m])), 1))
+          > 2 * (sum(increase(trustlane_nudges_total[24h])) / clamp_min(sum(increase(trustlane_shelf_picks_total[24h])), 1))
+          and sum(increase(trustlane_shelf_picks_total[15m])) >= 10
+        labels: {severity: warn}
+        annotations: {summary: "Nudge rate is twice the daily norm: look for a wrong barcode or price"}
+
+      - alert: RedExitsHigh
+        expr: >
+          sum(increase(trustlane_exit_decisions_total{decision="red"}[1h]))
+          / clamp_min(sum(increase(trustlane_exit_decisions_total[1h])), 1) > 0.03
+          and sum(increase(trustlane_exit_decisions_total[1h])) >= 20
+        labels: {severity: warn}
+        annotations: {summary: "More than 3% of exits are red: review risk thresholds"}
+
+      - alert: RedChecksMostlyCleared
+        expr: >
+          sum(increase(trustlane_red_checks_resolved_total{outcome="cleared"}[24h]))
+          / clamp_min(sum(increase(trustlane_red_checks_resolved_total[24h])), 1) > 0.30
+          and sum(increase(trustlane_red_checks_resolved_total[24h])) >= 3
+        labels: {severity: warn}
+        annotations: {summary: "Staff found nothing wrong in over 30% of red checks: thresholds too strict"}
+
+      - alert: ExitPaymentFailures
+        expr: >
+          sum(increase(trustlane_payments_total{status="captured"}[1h]))
+          / clamp_min(sum(increase(trustlane_payments_total[1h])), 1) < 0.99
+          and sum(increase(trustlane_payments_total[1h])) >= 20
+        labels: {severity: page}
+        annotations: {summary: "Exit payment success below 99%"}
+
+      - alert: CameraWeightDisagreement
+        expr: >
+          sum(increase(trustlane_vision_checks_total{result=~"override|disagree"}[1h]))
+          / clamp_min(sum(increase(trustlane_vision_checks_total{result=~"agree|override|disagree"}[1h])), 1) > 0.10
+          and sum(increase(trustlane_vision_checks_total{result=~"agree|override|disagree"}[1h])) >= 10
+        labels: {severity: warn}
+        annotations: {summary: "Camera and weight disagree on over 10% of picks: check layout or retrain"}
+
+      - alert: OpenDiscrepancies
+        expr: trustlane_open_discrepancies > 5
+        for: 10m
+        labels: {severity: warn}
+        annotations: {summary: "More than 5 shelf picks unscanned past the match window"}

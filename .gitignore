@@ -1,0 +1,15 @@
+.venv/
+.env
+__pycache__/
+.pytest_cache/
+# YOLO training output, datasets and downloaded weights
+runs/
+datasets/
+models/
+*.pt
+logs/
+data/outbox-*.jsonl
+data/staff_pin.txt
+# Runtime data: audit ledger and the gate's private signing key
+data/ledger.sqlite3
+data/gate_signing_key.pem

@@ -1,0 +1,9 @@
+[project]
+name = "trustlane"
+version = "0.1.0"
+description = "Scan-and-go loss prevention prototype: shelf sensing cross-checked with phone scans"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

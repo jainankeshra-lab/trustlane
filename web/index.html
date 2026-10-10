@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrustLane prototype</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px; display: flex; flex-direction: column; gap: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  a.tile { text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 6px; }
+  a.tile:hover { border-color: var(--green); }
+  ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="stack">
+    <span class="eyebrow">Mobile Scan &amp; Go · Loss prevention</span>
+    <h1 style="font-size:34px">TrustLane prototype</h1>
+    <p class="muted" style="margin:0">Shelf picks are cross-checked against phone scans. Open each screen in its own tab or device.</p>
+  </div>
+  <div class="grid">
+    <a class="card tile" href="/phone"><h2>Phone app</h2><span class="muted small">Shopper scans, cart, nudges, exit</span></a>
+    <a class="card tile" href="/shelf"><h2>Shelf simulator</h2><span class="muted small">Stands in for camera + load cells</span></a>
+    <a class="card tile" href="/gate"><h2>Exit gate</h2><span class="muted small">Green, amber or red at the door</span></a>
+    <a class="card tile" href="/ops"><h2>Ops console</h2><span class="muted small">Monitoring, alerts, staff checks</span></a>
+  </div>
+  <div class="card stack">
+    <h2>Demo script</h2>
+    <ol>
+      <li><b>Honest shopper:</b> in the phone app pick Aisle 7, take a razor on the shelf simulator, scan it, go to exit, tap at gate: green.</li>
+      <li><b>Forgot to scan:</b> take a chocolate and don't scan it. After the match window the phone gets a nudge.</li>
+      <li><b>Barcode swap:</b> take blades, then scan the gum barcode. The engine flags the swap.</li>
+      <li><b>Pocketed item:</b> take a razor, ignore the nudge, go to exit: red, staff check appears on the ops console.</li>
+      <li><b>Network down:</b> on the ops console switch the cloud offline, then exit a clean trip: the gate still verifies the signed token.</li>
+    </ol>
+    <p class="muted small" style="margin:0">Tip: start the server with <span class="mono">TRUSTLANE_MATCH_WINDOW=20</span> so nudges arrive faster during a demo.</p>
+  </div>
+  <p class="muted small" style="margin:0"><a href="/metrics">Prometheus metrics</a> · <a href="/docs">API docs</a></p>
+</main>
+</body>
+</html>

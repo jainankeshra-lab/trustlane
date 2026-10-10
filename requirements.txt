@@ -1,0 +1,11 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+prometheus-client>=0.20
+cryptography>=42
+httpx>=0.27
+segno>=1.6          # exit QR codes
+paho-mqtt>=2.0      # MQTT bridge (only used when TRUSTLANE_MQTT_URL is set)
+
+# tests
+pytest>=8
+amqtt>=0.11         # in-process MQTT broker for the MQTT end-to-end test

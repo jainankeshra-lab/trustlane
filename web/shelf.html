@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrustLane · Shelf simulator</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .lane { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .weight { font-size: 22px; font-weight: 700; }
+  .log { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+  .phones { display: flex; flex-direction: column; gap: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="stack">
+    <span class="eyebrow">Shelf simulator</span>
+    <h1>Stands in for the shelf camera, load cells and Bluetooth listener</h1>
+    <p class="muted" style="margin:0">Each button sends the same event a real shelf station sends when the weight on a lane changes.</p>
+  </div>
+  <div id="shelves" class="stack"></div>
+  <div class="card stack">
+    <div class="spread"><h2>Events sent</h2><span class="small muted">Bluetooth panel needs the staff PIN</span></div>
+    <div class="log small" id="log"></div>
+  </div>
+</main>
+<script src="/static/common.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const stock = {};        // sku -> units (or grams for loose produce) on the shelf
+const online = {};       // shelf_id -> station on/off
+const handSeen = {};     // shelf_id -> camera confirms a hand at the shelf
+const cameraSees = {};   // shelf_id -> "lane" | "none" | sku (misplaced item)
+const drift = {};        // shelf_id -> simulate load-cell creep
+const near = {};         // shelf_id -> Set of trip ids the shelf "hears" over Bluetooth
+let phones = [];         // active trips and their current rotating Bluetooth IDs (staff-only list)
+let catalog = [];
+
+function log(text, kind) {
+  $("log").insertAdjacentHTML("afterbegin",
+    `<div><span class="muted">${TL.clock(Date.now() / 1000)}</span> <span class="chip ${kind || ""}">${kind === "bad" ? "error" : "sent"}</span> ${TL.esc(text)}</div>`);
+}
+
+function shelves() {
+  const out = {};
+  catalog.filter((p) => p.monitored).forEach((p) => (out[p.shelf_id] ||= []).push(p));
+  return out;
+}
+
+function laneHtml(p, shelf) {
+  const dis = online[shelf] ? "" : "disabled";
+  if (p.sold_by === "weight") {
+    return `<div class="lane">
+      <b>Lane ${p.lane}: ${TL.esc(p.name)}</b>
+      <div class="spread"><span class="weight num">${(stock[p.sku] / 1000).toFixed(2)} kg</span>
+        <span class="muted small">${TL.rupees(p.price)}/kg</span></div>
+      <div class="row">
+        <button class="primary" data-weigh="${p.sku}" data-g="530" ${dis}>Take 530 g</button>
+        <button data-weigh="${p.sku}" data-g="-200" ${dis}>Put back 200 g</button>
+      </div></div>`;
+  }
+  return `<div class="lane">
+    <b>Lane ${p.lane}: ${TL.esc(p.name)}${p.age_restricted ? ' <span class="chip warn">ID</span>' : ""}</b>
+    <div class="spread"><span class="weight num">${(stock[p.sku] * p.unit_weight_g / 1000).toFixed(2)} kg</span>
+      <span class="muted small">${stock[p.sku]} units × ${p.unit_weight_g} g</span></div>
+    <div class="row">
+      <button class="primary" data-take="${p.sku}" ${dis}>Take 1</button>
+      <button data-return="${p.sku}" ${dis}>Put back 1</button>
+    </div></div>`;
+}
+
+function render() {
+  $("shelves").innerHTML = Object.entries(shelves()).map(([shelf, products]) => `
+    <div class="card stack">
+      <div class="spread">
+        <div><h2>Shelf ${shelf} · aisle ${products[0].aisle}</h2><div class="small muted mono">station sim-${shelf}</div></div>
+        <div class="row">
+          <label class="small">Camera (YOLO) sees
+            <select data-camera="${shelf}">
+              <option value="lane" ${(cameraSees[shelf] || "lane") === "lane" ? "selected" : ""}>the lane's product</option>
+              <option value="none" ${cameraSees[shelf] === "none" ? "selected" : ""}>no product</option>
+              ${catalog.filter((x) => x.monitored && x.sold_by !== "weight").map((x) => `<option value="${x.sku}" ${cameraSees[shelf] === x.sku ? "selected" : ""}>${TL.esc(x.name)} (misplaced)</option>`).join("")}
+            </select></label>
+          <label class="small"><input type="checkbox" data-hand="${shelf}" ${handSeen[shelf] !== false ? "checked" : ""}> Hand seen</label>
+          <label class="small"><input type="checkbox" data-drift="${shelf}" ${drift[shelf] ? "checked" : ""}> Scale drift +8 g</label>
+          <label class="small"><input type="checkbox" data-online="${shelf}" ${online[shelf] ? "checked" : ""}> Station online</label>
+        </div>
+      </div>
+      <div class="lanes">${products.map((p) => laneHtml(p, shelf)).join("")}</div>
+      <div class="small"><b>Phones this shelf hears over Bluetooth:</b>
+        <div class="phones">${phones.length ? phones.map((ph) => `
+          <label><input type="checkbox" data-near="${shelf}" value="${ph.session_id}" ${near[shelf] && near[shelf].has(ph.session_id) ? "checked" : ""}>
+          Trip <span class="mono">${ph.session_id}</span> (ID <span class="mono">${ph.eid}</span>, phone says aisle ${TL.esc(ph.aisle ?? "–")})</label>`).join("")
+          : `<span class="muted">No trips in the store (or no staff PIN entered).</span>`}</div>
+      </div>
+    </div>`).join("");
+}
+
+async function send(sku, kind, grams) {
+  const p = catalog.find((x) => x.sku === sku);
+  if (kind === "take" && p.sold_by !== "weight" && stock[sku] <= 0) return TL.toast("Lane is empty", "bad");
+  const hand = handSeen[p.shelf_id] !== false;
+  const sees = kind === "take" && p.sold_by !== "weight" ? (cameraSees[p.shelf_id] || "lane") : "none";
+  const seen = sees === "lane" ? p : catalog.find((x) => x.sku === sees);
+  const delta = p.sold_by === "weight" ? -grams : (kind === "take" ? -1 : 1) * (seen ? seen.unit_weight_g : p.unit_weight_g);
+  try {
+    const res = await TL.api("/api/shelf/events", {
+      station_id: `sim-${p.shelf_id}`, shelf_id: p.shelf_id, lane: p.lane, kind, qty: 1,
+      ts: Date.now() / 1000, weight_delta_g: delta, hand_seen: hand,
+      vision_sku: seen ? seen.sku : null, vision_confidence: seen ? 0.91 : null,
+    });
+    if (p.sold_by === "weight") stock[sku] -= grams; else stock[sku] += kind === "take" ? -1 : 1;
+    log(`${kind === "take" ? "Take" : "Put back"} · ${p.name} lane (${delta > 0 ? "+" : ""}${delta} g)` +
+        (seen && kind === "take" ? ` · camera: ${seen.name}` : "") +
+        (res.status === 202 ? " · buffered by gateway (cloud offline)" : ""));
+    render();
+  } catch (e) { log(`${p.name}: ${e.message}`, "bad"); }
+}
+
+async function heartbeats() {
+  for (const [shelf, products] of Object.entries(shelves())) {
+    if (!online[shelf]) continue;
+    TL.api("/api/shelf/heartbeat", {
+      station_id: `sim-${shelf}`, shelf_id: shelf, camera_fps: 14.8, outbox: 0,
+      lanes: products.map((p) => ({ lane: p.lane, grams: 0, drift_g: drift[shelf] ? 8 : 0, rezeroed: false })),
+    }).catch(() => {});
+  }
+}
+
+async function loadPhones() {
+  let next = [];
+  try { next = (await TL.staffApi("/api/ops/presence-sim")).data; } catch { /* no PIN yet */ }
+  const changed = JSON.stringify(next) !== JSON.stringify(phones);
+  phones = next;
+  if (changed) render();  // don't re-render (and close open menus) when nothing changed
+}
+
+async function presence() {
+  for (const [shelf, ids] of Object.entries(near)) {
+    if (!online[shelf] || !ids.size) continue;
+    const eids = phones.filter((ph) => ids.has(ph.session_id)).map((ph) => ph.eid);
+    if (eids.length) TL.api("/api/shelf/presence", { station_id: `sim-${shelf}`, shelf_id: shelf, eids }).catch(() => {});
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.take) send(b.dataset.take, "take");
+  if (b.dataset.return) send(b.dataset.return, "return");
+  if (b.dataset.weigh) { const g = parseFloat(b.dataset.g); send(b.dataset.weigh, g > 0 ? "take" : "return", g); }
+});
+document.addEventListener("change", (e) => {
+  const d = e.target.dataset;
+  if (d.hand) handSeen[d.hand] = e.target.checked;
+  if (d.camera) cameraSees[d.camera] = e.target.value;
+  if (d.drift) { drift[d.drift] = e.target.checked; heartbeats(); }
+  if (d.near) {
+    (near[d.near] ||= new Set())[e.target.checked ? "add" : "delete"](e.target.value);
+    log(`Shelf ${d.near} ${e.target.checked ? "hears" : "no longer hears"} trip ${e.target.value} over Bluetooth`);
+    presence();
+  }
+  if (d.online) {
+    online[d.online] = e.target.checked;
+    log(`Station sim-${d.online} ${e.target.checked ? "back online" : "switched off (heartbeats stop)"}`);
+    render();
+  }
+});
+
+(async () => {
+  catalog = (await TL.api("/api/catalog")).data;
+  catalog.forEach((p) => (stock[p.sku] = p.sold_by === "weight" ? 20000 : 10));
+  catalog.filter((p) => p.monitored).forEach((p) => (online[p.shelf_id] = true));
+  render();
+  heartbeats();
+  loadPhones();
+  setInterval(heartbeats, 10000);
+  setInterval(loadPhones, 5000);    // Bluetooth IDs rotate every 30 s
+  setInterval(presence, 2000);
+})();
+</script>
+</body>
+</html>

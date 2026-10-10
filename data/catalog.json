@@ -1,0 +1,14 @@
+{
+  "_note": "Demo catalog. Prices are in paise (19000 = Rs 190.00); for sold_by=weight the price is per kg. shelf_id/lane set means the product sits on a monitored shelf station.",
+  "products": [
+    {"sku": "razor",     "barcode": "8901000000011", "name": "3-blade razor",            "price": 29900, "unit_weight_g": 52,   "theft": "high",   "aisle": "7", "shelf_id": "S7-A", "lane": 0},
+    {"sku": "blades",    "barcode": "8901000000028", "name": "Razor blades, pack of 4",  "price": 69900, "unit_weight_g": 40,   "theft": "high",   "aisle": "7", "shelf_id": "S7-A", "lane": 1},
+    {"sku": "chocolate", "barcode": "8901000000035", "name": "Silk chocolate 150 g",     "price": 19000, "unit_weight_g": 160,  "theft": "medium", "aisle": "7", "shelf_id": "S7-A", "lane": 2},
+    {"sku": "formula",   "barcode": "8901000000042", "name": "Infant formula 400 g",     "price": 48000, "unit_weight_g": 450,  "theft": "high",   "aisle": "5", "shelf_id": "S5-A", "lane": 0},
+    {"sku": "beer",      "barcode": "8901000000080", "name": "Beer 500 ml can",          "price": 18000, "unit_weight_g": 530,  "theft": "high",   "aisle": "5", "shelf_id": "S5-A", "lane": 1, "age_restricted": true},
+    {"sku": "tomatoes",  "barcode": "4664",          "name": "Tomatoes (loose)",         "price": 4000,  "unit_weight_g": 100,  "theft": "low",    "aisle": "3", "shelf_id": "S3-P", "lane": 0, "sold_by": "weight"},
+    {"sku": "gum",       "barcode": "8901000000059", "name": "Spearmint gum",            "price": 3000,  "unit_weight_g": 22,   "theft": "low",    "aisle": "2", "shelf_id": null,   "lane": null},
+    {"sku": "milk",      "barcode": "8901000000066", "name": "Toned milk 1 L",           "price": 6800,  "unit_weight_g": 1040, "theft": "low",    "aisle": "3", "shelf_id": null,   "lane": null},
+    {"sku": "bread",     "barcode": "8901000000073", "name": "Wheat bread 400 g",        "price": 5500,  "unit_weight_g": 410,  "theft": "low",    "aisle": "3", "shelf_id": null,   "lane": null}
+  ]
+}

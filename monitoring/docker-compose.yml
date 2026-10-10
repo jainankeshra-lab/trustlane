@@ -1,0 +1,59 @@
+# TrustLane monitoring stack + store gateway broker.
+#   docker compose -f monitoring/docker-compose.yml up -d
+# Then run the server reachable from containers:  .\run.ps1 -Lan
+# with tracing:  $env:OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"; .\run.ps1 -Lan
+#
+# Grafana     http://localhost:3000  (admin / admin; "TrustLane store" dashboard is preloaded)
+# Prometheus  http://localhost:9090  (alert rules: monitoring/prometheus/alerts.yml)
+# Mosquitto   mqtt://localhost:1883  (set TRUSTLANE_MQTT_URL=mqtt://localhost:1883 to use it)
+name: trustlane-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+    ports: ["9090:9090"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  loki:
+    image: grafana/loki:3.1.0
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports: ["3100:3100"]
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    user: "0"
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+    ports: ["3200:3200"]
+
+  # Grafana Alloy ships the server's JSON event log to Loki and receives OpenTelemetry traces.
+  alloy:
+    image: grafana/alloy:v1.2.0
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ../logs:/logs:ro
+    ports: ["4318:4318", "12345:12345"]
+    depends_on: [loki, tempo]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus, loki, tempo]
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0.18
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports: ["1883:1883"]

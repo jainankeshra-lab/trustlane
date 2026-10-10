@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrustLane · Exit gate</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  body { min-height: 100vh; display: flex; flex-direction: column; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 360px; gap: 20px; padding: 24px; }
+  .gate { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; text-align: center; }
+  .light { width: min(40vh, 56vw); aspect-ratio: 1; border-radius: 50%; background: #C9D1CC;
+    box-shadow: inset 0 0 0 14px rgba(0,0,0,.06); transition: background .25s; }
+  .light.green { background: #2FA57E; } .light.amber { background: #E0A43A; } .light.red { background: #D2533F; }
+  .status { font-size: clamp(24px, 4vw, 44px); font-weight: 700; max-width: 18ch; }
+  .log { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow: auto; }
+  video { width: 100%; border-radius: 10px; background: #000; }
+  input, textarea { font: inherit; padding: 8px; border-radius: 10px; border: 1px solid var(--line); width: 100%; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <section class="gate">
+    <span class="eyebrow" id="gate-name">Exit gate</span>
+    <div class="light" id="light" role="img" aria-label="Gate light: waiting"></div>
+    <div class="status" id="status">Show your exit code to the scanner</div>
+  </section>
+  <aside class="card stack">
+    <div class="spread"><h2>Gate scanner</h2><span class="small muted"><span class="dot" id="live"></span> live</span></div>
+    <video id="video" playsinline muted hidden></video>
+    <div class="row">
+      <button class="primary" id="cam">Start QR scanner</button>
+      <span class="small muted" id="cam-status"></span>
+    </div>
+    <label class="small">Floor scale reading, grams (optional)
+      <input id="scale" type="number" min="0" step="10" placeholder="e.g. 1200"></label>
+    <details class="small"><summary>Paste a token instead</summary>
+      <textarea id="token" rows="3"></textarea><button id="send-token">Check token</button></details>
+    <div class="small"><span class="muted">Cloud:</span> <span class="chip" id="cloud">checking…</span></div>
+    <div class="small muted">Verifies exit tokens with Ed25519 public key <span class="mono" id="key"></span></div>
+    <h3>Gate log</h3>
+    <div class="log small" id="log"></div>
+  </aside>
+</main>
+<script src="/static/common.js"></script>
+<script src="/static/vendor/jsQR.js"></script>
+<script>
+const gateId = new URLSearchParams(location.search).get("id") || "G1";
+const $ = (id) => document.getElementById(id);
+$("gate-name").textContent = `Exit gate ${gateId}`;
+let resetTimer = null;
+
+function setLight(light, text) {
+  $("light").className = "light " + (light || "");
+  $("light").setAttribute("aria-label", `Gate light: ${light || "waiting"}`);
+  $("status").textContent = text;
+  clearTimeout(resetTimer);
+  if (light === "green") resetTimer = setTimeout(() => setLight("", "Show your exit code to the scanner"), 7000);
+  const words = { green: "GREEN", amber: "AMBER", red: "RED" };
+  $("log").insertAdjacentHTML("afterbegin",
+    `<div><span class="chip ${light}">${words[light] || "INFO"}</span> ${TL.esc(text)} <span class="muted">${TL.clock(Date.now() / 1000)}</span></div>`);
+}
+
+let lastToken = "", lastTokenTs = 0;
+async function submit(token) {
+  if (token === lastToken && Date.now() - lastTokenTs < 8000) return;  // same code still in view
+  lastToken = token; lastTokenTs = Date.now();
+  const grams = parseFloat($("scale").value);
+  try {
+    await TL.api(`/api/gate/${gateId}/tap`, { token, basket_weight_g: Number.isFinite(grams) ? grams : null });
+  } catch (e) { setLight("red", e.message); }
+}
+
+async function startScanner() {
+  const video = $("video");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = stream;
+    video.hidden = false;
+    await video.play();
+    $("cam").hidden = true;
+    $("cam-status").textContent = "Scanning…";
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const loop = () => {
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+        if (code && code.data.includes(".")) submit(code.data);
+      }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  } catch (e) { $("cam-status").textContent = "Camera not available: " + e.message; }
+}
+
+$("cam").onclick = startScanner;
+$("send-token").onclick = () => submit($("token").value.trim());
+TL.socket(`gate:${gateId}`, (msg) => { if (msg.kind === "gate") setLight(msg.data.light, msg.data.text); },
+  (on) => $("live").classList.toggle("on", on));
+TL.api("/api/gate/public-key").then(({ data }) => ($("key").textContent = data.key.slice(0, 12) + "…"));
+async function pollCloud() {
+  try {
+    const { data } = await TL.api("/api/gate/status");
+    $("cloud").textContent = data.cloud_online ? "online" : "offline: checking tokens locally";
+    $("cloud").className = "chip " + (data.cloud_online ? "ok" : "bad");
+  } catch { /* server down: keep last state */ }
+}
+pollCloud();
+setInterval(pollCloud, 3000);
+</script>
+</body>
+</html>

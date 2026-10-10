@@ -1,0 +1,5 @@
+# Shelf camera: hand detection + YOLO product recognition.
+# Large install (pulls PyTorch). Only needed on the shelf station or a laptop running --camera.
+ultralytics>=8.3
+opencv-python>=4.9
+mediapipe>=0.10.14

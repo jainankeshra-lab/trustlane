@@ -1,0 +1,5 @@
+pyserial>=3.5
+paho-mqtt>=2.0     # only for --mqtt
+# Optional: camera hand detection (--camera). Install only if you use it.
+# opencv-python>=4.9
+# mediapipe>=0.10.14
