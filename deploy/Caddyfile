@@ -1,0 +1,17 @@
+# One hostname per store, each served by its own TrustLane server process (see docker-compose.yml).
+# Caddy gets and renews Let's Encrypt certificates automatically for every hostname below.
+{
+	email {$ACME_EMAIL}
+}
+
+store1.{$DOMAIN} {
+	encode gzip
+	reverse_proxy store1:8000
+}
+
+store2.{$DOMAIN} {
+	encode gzip
+	reverse_proxy store2:8000
+}
+
+# Metrics stay private: Prometheus scrapes the stores on the internal network, not through Caddy.

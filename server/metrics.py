@@ -16,6 +16,10 @@ VISION_CHECKS = Counter("trustlane_vision_checks_total",
 ACTIVE_SESSIONS = Gauge("trustlane_active_sessions", "Shoppers currently in store")
 OPEN_DISCREPANCIES = Gauge("trustlane_open_discrepancies", "Picks past the match window with no scan")
 STATION_LAST_SEEN = Gauge("trustlane_station_last_seen_seconds", "Unix time a shelf station last reported", ["station"])
+GATE_LAST_SEEN = Gauge("trustlane_gate_last_seen_seconds", "Unix time a gate agent last reported", ["gate"])
+GATE_OFFLINE_QUEUE = Gauge("trustlane_gate_offline_queue", "Exits a gate agent let through offline, not yet synced", ["gate"])
+EDGE_LAST_SEEN = Gauge("trustlane_edge_last_seen_seconds", "Unix time a store edge last reported", ["edge"])
+EDGE_OUTBOX = Gauge("trustlane_edge_reported_outbox", "Shelf messages waiting at a store edge (as it last reported)", ["edge"])
 EVENT_LATENCY = Histogram(
     "trustlane_shelf_event_latency_seconds", "Shelf event time to server receive time",
     buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),

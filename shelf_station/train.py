@@ -73,6 +73,12 @@ def main() -> None:
     print(f"Model saved to {target}")
     if args.export:
         print("Exported:", YOLO(str(target)).export(format=args.export, imgsz=imgsz))
+    if args.task == "classify":
+        # The same model checks packages on shoppers' phones (onnxruntime-web / onnxruntime-react-native).
+        exported = Path(YOLO(str(target)).export(format="onnx", imgsz=imgsz, simplify=True))
+        if exported != target.with_suffix(".onnx"):
+            shutil.copy(exported, target.with_suffix(".onnx"))
+        print(f"Phone package-check model: {target.with_suffix('.onnx')} (served at /api/vision/package-model.onnx)")
     print(f"Run it:  python -m shelf_station.station --shelf S7-A --serial COM5 --camera 0 --model {target}")
 
 

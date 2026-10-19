@@ -84,6 +84,24 @@ class Settings:
     # Alert delivery: Slack incoming webhook and/or any webhook (JSON POST). Empty = console only.
     slack_webhook: str = field(default_factory=lambda: os.getenv("TRUSTLANE_SLACK_WEBHOOK", ""))
     alert_webhook: str = field(default_factory=lambda: os.getenv("TRUSTLANE_ALERT_WEBHOOK", ""))
+    # On-call SMS through Twilio for "bad" alerts (comma-separated numbers in TWILIO_TO).
+    twilio_sid: str = field(default_factory=lambda: os.getenv("TWILIO_ACCOUNT_SID", ""))
+    twilio_token: str = field(default_factory=lambda: os.getenv("TWILIO_AUTH_TOKEN", ""))
+    twilio_from: str = field(default_factory=lambda: os.getenv("TWILIO_FROM", ""))
+    twilio_to: str = field(default_factory=lambda: os.getenv("TWILIO_TO", ""))
+    # Invoice e-mails (SMTP over STARTTLS). Empty host: invoices are only in the app / at their link.
+    smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", ""))
+    smtp_port: int = field(default_factory=lambda: int(os.getenv("SMTP_PORT", "587")))
+    smtp_user: str = field(default_factory=lambda: os.getenv("SMTP_USER", ""))
+    smtp_password: str = field(default_factory=lambda: os.getenv("SMTP_PASSWORD", ""))
+    smtp_from: str = field(default_factory=lambda: os.getenv("SMTP_FROM", ""))
+    # Public address of this server, for links in e-mails (e.g. https://store1.trustlane.example).
+    public_url: str = field(default_factory=lambda: os.getenv("TRUSTLANE_PUBLIC_URL", "http://localhost:8000"))
+    # Which store this server runs (one server process per store; see deploy/).
+    store_id: str = field(default_factory=lambda: os.getenv("TRUSTLANE_STORE_ID", "store-1"))
+
+    # Expo push notifications to the native app. Off: the app relies on its live connection.
+    push_enabled: bool = field(default_factory=lambda: os.getenv("TRUSTLANE_PUSH", "1") != "0")
 
     # Staff PIN for the ops console and staff actions. Empty = a random PIN is generated at start
     # and written to data/staff_pin.txt.
@@ -93,16 +111,31 @@ class Settings:
     mqtt_url: str = field(default_factory=lambda: os.getenv("TRUSTLANE_MQTT_URL", ""))
 
     # Rate limits per client IP.
-    rate_per_second: float = 30
-    sessions_per_minute: float = 10
+    rate_per_second: float = field(default_factory=lambda: _env("RATE_PER_SECOND", 30))
+    sessions_per_minute: float = field(default_factory=lambda: _env("SESSIONS_PER_MINUTE", 10))
 
     # Ledger database and gate signing key live here; the catalog is read from catalog_path.
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("TRUSTLANE_DATA_DIR", ROOT / "data")))
     catalog_path: Path = field(default_factory=lambda: Path(os.getenv("TRUSTLANE_CATALOG", ROOT / "data" / "catalog.json")))
+    # Store offers, coupons and loyalty rules (editable in the ops console).
+    offers_path: Path = field(default_factory=lambda: Path(os.getenv("TRUSTLANE_OFFERS", ROOT / "data" / "promotions.json")))
     station_key: str = field(default_factory=lambda: os.getenv("TRUSTLANE_STATION_KEY", ""))
+    # Key the exit gate devices (gate screen, gate agent) send as X-Gate-Key. Empty: not checked, and
+    # phones may also post their token straight to a gate (demo). Set it in a real store: phones then
+    # reach a gate only by NFC tap (a signed tag read) or by showing their QR to the gate's camera.
+    gate_key: str = field(default_factory=lambda: os.getenv("TRUSTLANE_GATE_KEY", ""))
+    scale_fresh_s: float = 5.0  # a floor-scale reading older than this isn't used for a tap
+
+    # Package check model served to phones (the shelf classifier exported to ONNX by shelf_station.train).
+    package_model_path: Path = field(default_factory=lambda: Path(os.getenv(
+        "TRUSTLANE_PACKAGE_MODEL", ROOT / "models" / "shelf-classify.onnx")))
 
     # Payments: "auto" uses Razorpay when test keys are set, otherwise the built-in sandbox.
     payments_provider: str = field(default_factory=lambda: os.getenv("TRUSTLANE_PAYMENTS", "auto"))
     razorpay_key_id: str = field(default_factory=lambda: os.getenv("RAZORPAY_KEY_ID", ""))
     razorpay_key_secret: str = field(default_factory=lambda: os.getenv("RAZORPAY_KEY_SECRET", ""))
     razorpay_webhook_secret: str = field(default_factory=lambda: os.getenv("RAZORPAY_WEBHOOK_SECRET", ""))
+    # UPI Reserve Pay through Cashfree (sandbox): funds blocked once, each exit debited with no tap.
+    cashfree_client_id: str = field(default_factory=lambda: os.getenv("CASHFREE_CLIENT_ID", ""))
+    cashfree_client_secret: str = field(default_factory=lambda: os.getenv("CASHFREE_CLIENT_SECRET", ""))
+    reserve_pay_max_paise: float = field(default_factory=lambda: _env("RESERVE_PAY_MAX_PAISE", 500_000))

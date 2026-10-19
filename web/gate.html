@@ -39,6 +39,7 @@
       <textarea id="token" rows="3"></textarea><button id="send-token">Check token</button></details>
     <div class="small"><span class="muted">Cloud:</span> <span class="chip" id="cloud">checking…</span></div>
     <div class="small muted">Verifies exit tokens with Ed25519 public key <span class="mono" id="key"></span></div>
+    <div class="small muted">Offline check: <span id="offline-check">loading…</span> <span id="queued"></span></div>
     <h3>Gate log</h3>
     <div class="log small" id="log"></div>
   </aside>
@@ -62,14 +63,69 @@ function setLight(light, text) {
     `<div><span class="chip ${light}">${words[light] || "INFO"}</span> ${TL.esc(text)} <span class="muted">${TL.clock(Date.now() / 1000)}</span></div>`);
 }
 
+// ---------- gate device key (TRUSTLANE_GATE_KEY): proves this screen is a store gate
+async function gateApi(path, body) {
+  const headers = () => ({ "X-Gate-Key": TL.load("tl.gatesecret", "") });
+  try { return await TL.api(path, body, "POST", headers()); }
+  catch (e) {
+    if (e.status !== 401 || !/Gate key/.test(e.message)) throw e;
+    TL.save("tl.gatesecret", (window.prompt("Gate key (TRUSTLANE_GATE_KEY on the server)") || "").trim());
+    return TL.api(path, body, "POST", headers());
+  }
+}
+
+// ---------- offline: the gate verifies the Ed25519 signature itself when the server is unreachable
+let publicKey = null;
+const b64u = (s) => {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+};
+async function loadKey() {
+  try { TL.save("tl.gatekey", (await TL.api("/api/gate/public-key")).data.key); } catch { /* use the cached key */ }
+  const raw = TL.load("tl.gatekey", null);
+  if (raw && window.crypto && crypto.subtle) {
+    publicKey = await crypto.subtle.importKey("raw", b64u(raw), { name: "Ed25519" }, false, ["verify"]).catch(() => null);
+  }
+  $("offline-check").textContent = publicKey ? "ready (key cached on this gate)" : "unavailable in this browser";
+}
+async function verifyLocally(token) {
+  const [body, sig] = token.split(".");
+  if (!publicKey || !body || !sig) return null;
+  const ok = await crypto.subtle.verify({ name: "Ed25519" }, publicKey, b64u(sig), new TextEncoder().encode(body));
+  if (!ok) return null;
+  const payload = JSON.parse(new TextDecoder().decode(b64u(body)));
+  return Date.now() / 1000 > payload.exp ? null : payload;
+}
+async function syncOffline() {
+  const queue = TL.load("tl.gatequeue", []);
+  while (queue.length) {
+    try { await gateApi(`/api/gate/${gateId}/offline-sync`, { token: queue[0] }); }
+    catch (e) { if (e instanceof TypeError) break; }  // still unreachable: try later
+    queue.shift();
+    TL.save("tl.gatequeue", queue);
+  }
+  $("queued").textContent = queue.length ? `${queue.length} offline exit(s) waiting to sync` : "";
+}
+
 let lastToken = "", lastTokenTs = 0;
 async function submit(token) {
   if (token === lastToken && Date.now() - lastTokenTs < 8000) return;  // same code still in view
   lastToken = token; lastTokenTs = Date.now();
   const grams = parseFloat($("scale").value);
   try {
-    await TL.api(`/api/gate/${gateId}/tap`, { token, basket_weight_g: Number.isFinite(grams) ? grams : null });
-  } catch (e) { setLight("red", e.message); }
+    await gateApi(`/api/gate/${gateId}/tap`, { token, basket_weight_g: Number.isFinite(grams) ? grams : null });
+  } catch (e) {
+    if (!(e instanceof TypeError)) return setLight("red", e.message);
+    const payload = await verifyLocally(token);  // server unreachable
+    if (!payload) return setLight("red", "Exit code not valid");
+    if (payload.decision !== "green") return setLight("red", "Offline: a team member will help you");
+    const queue = TL.load("tl.gatequeue", []);
+    queue.push(token);
+    TL.save("tl.gatequeue", queue);
+    setLight("green", "Offline check passed on this gate. Gate open");
+    syncOffline();
+  }
 }
 
 async function startScanner() {
@@ -108,10 +164,15 @@ async function pollCloud() {
     const { data } = await TL.api("/api/gate/status");
     $("cloud").textContent = data.cloud_online ? "online" : "offline: checking tokens locally";
     $("cloud").className = "chip " + (data.cloud_online ? "ok" : "bad");
-  } catch { /* server down: keep last state */ }
+  } catch {
+    $("cloud").textContent = "server unreachable: checking codes on this gate";
+    $("cloud").className = "chip bad";
+  }
 }
 pollCloud();
 setInterval(pollCloud, 3000);
+loadKey();
+setInterval(syncOffline, 5000);
 </script>
 </body>
 </html>

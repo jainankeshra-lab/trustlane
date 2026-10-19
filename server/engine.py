@@ -9,9 +9,12 @@ time, and returns a list of Notes that the web layer pushes over WebSockets.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import secrets
+from pathlib import Path
 from collections import deque
 from dataclasses import asdict, dataclass, field
 
@@ -23,6 +26,7 @@ from .security import (TokenSigner, cart_hash, eid_matches, new_session_id, new_
                        verify_scan_signature)
 
 WEIGHT_RESIDUE_G = 20  # a loose-produce pick with less than this left counts as fully put back
+log = logging.getLogger("trustlane")
 EVENT_LOG = logging.getLogger("trustlane.events")  # JSON lines, shipped to Loki by Promtail
 
 
@@ -44,6 +48,7 @@ class CartLine:
     note: str = ""
     grams: float | None = None  # loose produce: weight from the shelf
     age_restricted: bool = False
+    return_ts: float = 0.0      # the shopper tapped "Put back" in the app; the shelf confirms it
 
     def public(self) -> dict:
         return asdict(self)
@@ -60,6 +65,7 @@ class Pick:
     status: str = "open"  # open | matched | returned | released
     matched_session: str | None = None
     nudged: bool = False
+    denied: list[str] = field(default_factory=list)  # shoppers who answered the nudge "Not me"
     swap_flagged: bool = False
     evidence: str = ""     # how the product was identified: weight only, camera confirmed, ...
     attribution: str = ""  # how the shoppers were chosen: presence | aisle | silent | scan
@@ -96,6 +102,7 @@ class Session:
     created: float
     aisle: str | None = None          # self-reported by the phone
     aisle_ts: float = 0.0
+    aisle_since: float = 0.0          # when the phone moved to its current aisle
     presence_aisle: str | None = None  # observed: a shelf station detected the phone's Bluetooth ID
     presence_shelf: str | None = None
     presence_ts: float = 0.0
@@ -112,10 +119,19 @@ class Session:
     consent_ts: float = 0.0
     age_verified: bool = False
     mismatch_ts: float = 0.0
+    push_token: str | None = None  # Expo push token from the native app
+    coupon: str | None = None      # coupon code the shopper applied
+    points_redeem: int = 0         # loyalty points the shopper chose to use on this trip
+    discount: int = 0              # offers + coupon + points, set by Engine._reprice
+
+    @property
+    def subtotal(self) -> int:
+        return sum(ln.price for ln in self.lines if ln.status not in ("removed", "refunded"))
 
     @property
     def total(self) -> int:
-        return sum(ln.price for ln in self.lines if ln.status not in ("removed", "refunded"))
+        """What the shopper pays: shelf prices (GST included) minus offers, coupon and points."""
+        return max(0, self.subtotal - self.discount)
 
     @property
     def live_lines(self) -> list[CartLine]:
@@ -136,8 +152,19 @@ class EngineError(Exception):
         self.notes = notes or []
 
 
+def _session_from(d: dict) -> "Session":
+    d = dict(d)
+    d["lines"] = [_rebuild(CartLine, x) for x in d.get("lines", [])]
+    d["risk"] = [_rebuild(RiskEvent, x) for x in d.get("risk", [])]
+    d["pending_scans"] = [_rebuild(PendingScan, x) for x in d.get("pending_scans", [])]
+    return _rebuild(Session, d)
+
+
 def _rebuild(cls, data: dict):
-    return cls(**data)
+    """Dataclass from saved data; fields added since it was saved take their defaults, unknown ones are ignored."""
+    from dataclasses import fields
+    names = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in data.items() if k in names})
 
 
 class Engine:
@@ -161,6 +188,15 @@ class Engine:
         self.stock: dict[str, float] = {p.sku: 50.0 for p in catalog.all()}  # units, or kg for loose produce
         self.learned: dict[str, dict] = {}  # sku -> {"mean": grams per unit, "n": samples}
         self.presence_seen_ts = 0.0
+        self.gates: dict[str, dict] = {}   # gate agents' heartbeats
+        self.edges: dict[str, dict] = {}   # store edge processes' heartbeats
+        from .invoice import Invoicer, load_store
+        from .pricing import Offers
+        self.offers_path = Path(settings.offers_path)
+        self.offers = Offers.load(self.offers_path)
+        self.store = load_store(settings.data_dir)
+        self.invoicer = Invoicer(ledger, settings.data_dir, self.store)
+        self.invoice_listeners: list = []  # called with (session, invoice) after each paid trip (e-mail receipts)
         self._counter = 0
 
     # ------------------------------------------------------------------ persistence
@@ -179,11 +215,9 @@ class Engine:
         self.presence_seen_ts = data.get("presence_seen_ts", 0.0)
         self.sessions = {}
         for d in data.get("sessions", []):
-            d["lines"] = [_rebuild(CartLine, x) for x in d.get("lines", [])]
-            d["risk"] = [_rebuild(RiskEvent, x) for x in d.get("risk", [])]
-            d["pending_scans"] = [_rebuild(PendingScan, x) for x in d.get("pending_scans", [])]
-            self.sessions[d["session_id"]] = Session(**d)
-        self.picks = {d["pick_id"]: Pick(**d) for d in data.get("picks", [])}
+            sess = _session_from(d)
+            self.sessions[sess.session_id] = sess
+        self.picks = {d["pick_id"]: _rebuild(Pick, d) for d in data.get("picks", [])}
         self.stations = data.get("stations", {})
         self.checks = data.get("checks", {})
         self.disputes = data.get("disputes", {})
@@ -201,8 +235,32 @@ class Engine:
     def _get(self, session_id: str) -> Session:
         sess = self.sessions.get(session_id)
         if not sess:
-            raise EngineError(404, "No such shopping session")
+            data = self.ledger.load_trip(session_id)  # a finished trip moved out of memory (refund, dispute)
+            if not data:
+                raise EngineError(404, "No such shopping session")
+            sess = self.sessions[session_id] = _session_from(data)
         return sess
+
+    def compact(self, now: float, keep_finished_s: float = 3600) -> dict:
+        """Keep live state small: finished trips go to the archive table after an hour, and resolved
+        shelf picks are dropped once nobody can put the item back against them any more. Without this
+        every state snapshot (and so every request) gets slower as the day goes on."""
+        archived = 0
+        for sid, sess in list(self.sessions.items()):
+            if sess.state not in ("exited", "cancelled"):
+                continue
+            ended = (sess.receipt or {}).get("ts") or sess.created
+            if now - ended < keep_finished_s or any(d["session_id"] == sid and d["status"] == "open"
+                                                    for d in self.disputes.values()):
+                continue
+            self.ledger.archive_trip(sid, sess.shopper_id, ended, asdict(sess))
+            del self.sessions[sid]
+            archived += 1
+        horizon = self.s.return_lookback_s + 300
+        stale = [pid for pid, p in self.picks.items() if p.status != "open" and now - p.ts > horizon]
+        for pid in stale:
+            del self.picks[pid]
+        return {"archived_trips": archived, "dropped_picks": len(stale)}
 
     def _log(self, now: float, kind: str, text: str, session_id: str | None = None,
              level: str = "info", **payload) -> Note:
@@ -259,12 +317,25 @@ class Engine:
     def set_location(self, session_id: str, aisle: str, now: float) -> list[Note]:
         sess = self._get(session_id)
         changed = sess.aisle != aisle
+        if sess.aisle != aisle:
+            sess.aisle_since = now
         sess.aisle, sess.aisle_ts = aisle, now
         notes = [self._log(now, "session.location", f"Phone reports aisle {aisle}", session_id)] if changed else []
         return notes + self._check_mismatch(sess, now)
 
+    def register_push(self, session_id: str, token: str, now: float) -> list[Note]:
+        sess = self._get(session_id)
+        if not token.startswith(("ExponentPushToken[", "ExpoPushToken[")) or len(token) > 200:
+            raise EngineError(400, "Not an Expo push token")
+        sess.push_token = token
+        return [self._log(now, "push.registered", "Phone registered for push notifications", session_id)]
+
     def _presence_fresh(self, sess: Session, now: float) -> bool:
-        return bool(sess.presence_ts) and now - sess.presence_ts <= self.s.presence_fresh_s
+        """A recent Bluetooth sighting that the phone hasn't since contradicted by moving to another aisle."""
+        if not sess.presence_ts or now - sess.presence_ts > self.s.presence_fresh_s:
+            return False
+        moved_after = sess.aisle and sess.aisle != sess.presence_aisle and sess.aisle_since > sess.presence_ts
+        return not moved_after
 
     def presence_active(self, now: float) -> bool:
         """True while shelf stations are reporting Bluetooth detections."""
@@ -277,17 +348,31 @@ class Engine:
         notes: list[Note] = []
         for sess in self.sessions.values():
             if sess.state == "shopping" and any(eid_matches(sess.key, e, now) for e in eids):
-                moved = sess.presence_aisle != aisle
-                sess.presence_aisle, sess.presence_shelf, sess.presence_ts = aisle, shelf_id, now
-                if moved:
-                    notes.append(self._log(now, "session.presence", f"Detected near shelf {shelf_id} (aisle {aisle})",
-                                           sess.session_id))
-                notes += self._check_mismatch(sess, now)
+                notes += self._mark_presence(sess, shelf_id, aisle, now, "shelf heard the phone")
         return notes
+
+    def heard_shelf(self, session_id: str, shelf_id: str, now: float) -> list[Note]:
+        """The phone heard this shelf's current signed token (the server already checked it)."""
+        sess = self._get(session_id)
+        if sess.state != "shopping":
+            return []
+        self.presence_seen_ts = now
+        aisle = next((p.aisle for p in self.catalog.all() if p.shelf_id == shelf_id), None)
+        return self._mark_presence(sess, shelf_id, aisle, now, "phone heard the shelf")
+
+    def _mark_presence(self, sess: Session, shelf_id: str, aisle: str | None, now: float, how: str) -> list[Note]:
+        notes: list[Note] = []
+        if sess.presence_aisle != aisle:
+            notes.append(self._log(now, "session.presence", f"Detected near shelf {shelf_id} (aisle {aisle}, {how})",
+                                   sess.session_id))
+        sess.presence_aisle, sess.presence_shelf, sess.presence_ts = aisle, shelf_id, now
+        return notes + self._check_mismatch(sess, now)
 
     def _check_mismatch(self, sess: Session, now: float) -> list[Note]:
         """The phone claims one aisle while a shelf detected it in another: likely spoofed location."""
         if not (self._presence_fresh(sess, now) and sess.aisle and now - sess.aisle_ts <= self.s.location_fresh_s):
+            return []
+        if sess.presence_ts < sess.aisle_since + 10:  # still walking between aisles
             return []
         if sess.aisle == sess.presence_aisle or now - sess.mismatch_ts < 120:
             return []
@@ -296,13 +381,58 @@ class Engine:
                               f"Phone reported aisle {sess.aisle}, but shelf {sess.presence_shelf} "
                               f"detected it in aisle {sess.presence_aisle}")
 
+    # ------------------------------------------------------------------ pricing: offers, coupon, points, GST
+    def _reprice(self, sess: Session) -> dict:
+        from .pricing import price_basket
+        items = [{"line_id": ln.line_id, "sku": ln.sku, "price": ln.price} for ln in sess.live_lines]
+        products = {p.sku: p for p in self.catalog.all()}
+        pricing = price_basket(items, products, self.offers, sess.coupon, sess.points_redeem)
+        sess.discount = pricing["discount_total"]
+        return pricing
+
+    def apply_coupon(self, session_id: str, code: str, now: float) -> list[Note]:
+        sess = self._get(session_id)
+        if sess.state not in ("shopping", "at_exit"):
+            raise EngineError(409, "Coupons can be added while shopping")
+        code = (code or "").strip().upper()
+        if not code:
+            sess.coupon = None
+            return [self._cart_note(sess)]
+        rule = self.offers.coupons.get(code)
+        if not rule:
+            raise EngineError(404, "That coupon code isn't valid")
+        if rule.get("once_per_shopper") and self.ledger.coupon_used(sess.shopper_id, code):
+            raise EngineError(409, "You've already used this coupon")
+        sess.coupon = code
+        return [self._log(now, "coupon.applied", f"Coupon {code} applied", session_id), self._cart_note(sess)]
+
+    def set_points(self, session_id: str, points: int, now: float) -> list[Note]:
+        sess = self._get(session_id)
+        if sess.state not in ("shopping", "at_exit"):
+            raise EngineError(409, "Points can be used while shopping")
+        balance, rule = self.ledger.points(sess.shopper_id), self.offers.loyalty
+        if points < 0 or points > balance:
+            raise EngineError(400, f"You have {balance} points")
+        if 0 < points < rule["min_redeem"]:
+            raise EngineError(400, f"Use at least {rule['min_redeem']} points at a time")
+        sess.points_redeem = points
+        return [self._cart_note(sess)]
+
     def cart_view(self, session_id: str) -> dict:
         sess = self._get(session_id)
+        pricing = self._reprice(sess)
         return {
             "session_id": sess.session_id,
             "state": sess.state,
             "aisle": sess.aisle,
             "lines": [ln.public() for ln in sess.lines],
+            "subtotal": pricing["subtotal"],
+            "discounts": pricing["discounts"],
+            "coupon": pricing["coupon"],
+            "points": {"balance": self.ledger.points(sess.shopper_id), "redeemed": pricing["points_redeemed"],
+                       "will_earn": pricing["points_earned"], **self.offers.loyalty},
+            "gst": pricing["gst"],
+            "offers": [r.get("label", r["id"]) for r in self.offers.promotions],
             "total": sess.total,
             "items": len(sess.live_lines),
             "needs_id": sess.needs_id and not sess.age_verified,
@@ -341,9 +471,9 @@ class Engine:
         metrics.SCANS.labels(str(product.monitored).lower()).inc()
         notes = [self._log(now, "scan", f"Scanned {product.name}", session_id, sku=product.sku, seq=seq)]
 
-        if package_label and package_label != product.sku and (package_confidence or 0) >= self.s.package_min_confidence:
-            held = self.catalog.get(package_label)
-            held_name = held.name if held else package_label
+        held = self.catalog.get(package_label) if package_label else None  # "empty" / unknown labels say nothing
+        if held and held.sku != product.sku and (package_confidence or 0) >= self.s.package_min_confidence:
+            held_name = held.name
             line.status, line.note = "flagged", f"Package looks like {held_name}"
             notes += self._add_risk(sess, now, "package_mismatch", self.s.package_mismatch_points,
                                     f"Package check: barcode says {product.name}, package looks like {held_name}",
@@ -358,7 +488,10 @@ class Engine:
                 "text": f"{product.name} is age-restricted. Please show your ID to a team member before you leave."}))
             notes.append(self._log(now, "id.needed", f"ID check needed ({product.name})", session_id, level="warn"))
 
-        pick = next((p for p in self._open_picks_for(session_id) if p.sku == product.sku), None)
+        # Several open picks of this product may name this shopper (busy aisle). Match the one most
+        # likely to be theirs: the fewest other possible takers, then the most recent.
+        options = [p for p in self._open_picks_for(session_id) if p.sku == product.sku]
+        pick = min(options, key=lambda p: (len(p.candidates), -p.ts), default=None)
         if pick:
             notes += self._match(pick, sess, line, now)
         else:
@@ -408,6 +541,8 @@ class Engine:
             held = self.catalog.get(pick.sku)
             if pick.swap_flagged or held is None or held.by_weight or now - pick.ts > self.s.match_window_s:
                 continue
+            if len(pick.candidates) != 1:  # a shared pick may be someone else's: no swap accusation
+                continue
             if held.price <= scanned.price:
                 continue
             if not (scanned.monitored or scanned.aisle != pick.aisle):
@@ -423,6 +558,44 @@ class Engine:
                 "sku": held.sku, "pick_id": pick.pick_id}))
             return notes
         return []
+
+    # ------------------------------------------------------------------ shopper changes their mind
+    def put_back(self, session_id: str, line_id: str, now: float) -> list[Note]:
+        """The shopper taps "Put back" on a cart line. Items on monitored shelves come off the cart when the
+        shelf feels them return (so a tap alone can't make a pocketed item free); others come off at once."""
+        sess = self._get(session_id)
+        if sess.state != "shopping":
+            raise EngineError(409, "You can change your cart while shopping")
+        line = sess.line(line_id)
+        if not line or line.status in ("removed", "refunded"):
+            raise EngineError(404, "That item isn't in your cart")
+        product = self.catalog.get(line.sku)
+        if product and product.monitored and not product.by_weight:
+            line.return_ts = now
+            return [Note(f"phone:{session_id}", "info", {"text": f"Put the {line.name} back on its shelf: "
+                                                                 f"it comes off your cart when the shelf feels it."}),
+                    self._cart_note(sess)]
+        return self._remove_line(sess, line, now, "Removed by the shopper")
+
+    def _remove_line(self, sess: Session, line: CartLine, now: float, note: str) -> list[Note]:
+        line.status, line.note, line.return_ts = "removed", note, 0.0
+        if line.pick_id and line.pick_id in self.picks:
+            self.picks[line.pick_id].status = "returned"
+        sess.pending_scans = [ps for ps in sess.pending_scans if ps.line_id != line.line_id]
+        return [self._log(now, "return", f"{line.name} put back; cart updated", sess.session_id, line_id=line.line_id),
+                Note(f"phone:{sess.session_id}", "info", {"text": f"{line.name} is off your cart."}),
+                self._cart_note(sess)]
+
+    # ------------------------------------------------------------------ gate agents and store edges
+    def gate_heartbeat(self, gate_id: str, info: dict, now: float) -> None:
+        self.gates[gate_id] = {**self.gates.get(gate_id, {}), **info, "gate_id": gate_id, "last_seen": now}
+        metrics.GATE_LAST_SEEN.labels(gate_id).set(now)
+        metrics.GATE_OFFLINE_QUEUE.labels(gate_id).set(info.get("offline_queue") or 0)
+
+    def edge_heartbeat(self, edge_id: str, info: dict, now: float) -> None:
+        self.edges[edge_id] = {**info, "edge_id": edge_id, "last_seen": now}
+        metrics.EDGE_LAST_SEEN.labels(edge_id).set(now)
+        metrics.EDGE_OUTBOX.labels(edge_id).set(info.get("outbox") or 0)
 
     # ------------------------------------------------------------------ shelf events
     def heartbeat(self, station_id: str, shelf_id: str, now: float, info: dict | None = None) -> None:
@@ -526,32 +699,40 @@ class Engine:
         metrics.VISION_CHECKS.labels(result).inc()
 
     def _candidates(self, product: Product, now: float) -> tuple[list[str], str]:
-        """Who could have taken this item, best evidence first:
+        """Who could have taken this item. Every kind of evidence adds suspects; none hides anyone:
         1. phones a shelf station detected in this aisle (observed, hard to fake),
-        2. phones that reported this aisle,
-        3. nobody located here: every shopper whose location we can't vouch for. Going silent, or
-           switching Bluetooth off while stations are listening, makes you a suspect, not invisible."""
+        2. phones that reported this aisle (unless Bluetooth places them elsewhere),
+        3. phones whose location we can't vouch for at all. Going silent, or switching Bluetooth off
+           while stations are listening, makes you a suspect, not invisible, even if someone else is
+           standing at the shelf."""
         shopping = [s for s in self.sessions.values() if s.state == "shopping"]
-        how = "presence"
-        cands = [s for s in shopping if self._presence_fresh(s, now) and s.presence_aisle == product.aisle]
-        if not cands:
-            how = "aisle"
-            cands = [s for s in shopping if s.aisle == product.aisle and now - s.aisle_ts <= self.s.attribution_window_s
-                     and not (self._presence_fresh(s, now) and s.presence_aisle != product.aisle)]
-        if not cands:
-            how = "silent"
-            if self.presence_active(now):
-                cands = [s for s in shopping if not self._presence_fresh(s, now)]
-            else:
-                cands = [s for s in shopping if s.aisle is None or now - s.aisle_ts > self.s.location_fresh_s]
-        ids = [s.session_id for s in cands]
+        presence = [s for s in shopping if self._presence_fresh(s, now) and s.presence_aisle == product.aisle]
+        aisle = [s for s in shopping if s not in presence and s.aisle == product.aisle
+                 and now - s.aisle_ts <= self.s.attribution_window_s
+                 and not (self._presence_fresh(s, now) and s.presence_aisle != product.aisle)]
+        located = presence + aisle
+        if self.presence_active(now):
+            silent = [s for s in shopping if not self._presence_fresh(s, now)
+                      and (s.aisle is None or now - s.aisle_ts > self.s.location_fresh_s)]
+        else:
+            silent = [s for s in shopping if s.aisle is None or now - s.aisle_ts > self.s.location_fresh_s]
+        silent = [] if located else silent  # suspects only when nobody can be placed at the shelf
+        how = "presence" if presence and not aisle else "aisle" if located else "silent"
+        if located and silent:
+            how += "+silent"
+        ids = [s.session_id for s in located + silent]
         # A shopper who already scanned this product counts too, whatever their location says.
         for s in shopping:
             if s.session_id not in ids and any(
                     ps.sku == product.sku and now - ps.ts <= self.s.match_window_s for ps in s.pending_scans):
                 ids.append(s.session_id)
-                how = how if cands else "scan"
+                how = how if ids[:-1] else "scan"
         return ids, how
+
+    def _is_silent(self, sess: Session, now: float) -> bool:
+        if self._presence_fresh(sess, now):
+            return False
+        return sess.aisle is None or now - sess.aisle_ts > self.s.location_fresh_s
 
     def _take(self, product: Product, shelf_id: str, now: float, hand_seen: bool | None,
               evidence: str = "", grams: float | None = None) -> list[Note]:
@@ -572,13 +753,14 @@ class Engine:
         who = cands[0] if len(cands) == 1 else f"{len(cands)} shoppers"
         notes = [self._log(now, "pick", f"{what} taken from {shelf_id} by {who} [{how}]{hand}",
                            cands[0] if len(cands) == 1 else None, pick_id=pick.pick_id)]
-        if how == "silent":
+        silent_ids = [sid for sid in cands if self._is_silent(self.sessions[sid], now)]
+        if silent_ids:
             self.stats["silent_attributions"] += 1
-            for sid in cands:
+            for sid in silent_ids:
                 notes += self._add_risk(self.sessions[sid], now, "silent_location",
                                         self.s.silent_location_points / len(cands),
-                                        f"Location unknown while {product.name} was taken in aisle {product.aisle} "
-                                        f"with no located shopper nearby", pick_id=pick.pick_id)
+                                        f"Location unknown while {product.name} was taken in aisle {product.aisle}",
+                                        pick_id=pick.pick_id)
         # The shopper may have scanned before the shelf reported the pick.
         for sid in cands:
             sess = self.sessions[sid]
@@ -593,12 +775,35 @@ class Engine:
                     break
         return notes
 
+    def _located_at(self, aisle: str, now: float) -> set[str]:
+        """Shoppers we can place in this aisle right now (Bluetooth presence, or a fresh aisle report)."""
+        return {x.session_id for x in self.sessions.values() if x.state == "shopping" and (
+            (self._presence_fresh(x, now) and x.presence_aisle == aisle)
+            or (x.aisle == aisle and now - x.aisle_ts <= self.s.location_fresh_s))}
+
     def _return(self, product: Product, shelf_id: str, now: float, grams: float | None = None) -> list[Note]:
+        """The shelf saw one unit come back. It can't see who, so: first a shopper who tapped "Put back"
+        in the app, then picks of shoppers standing in this aisle, then the oldest open pick."""
         self.stats["returns"] += 1
         metrics.RETURNS.inc()
+        here = self._located_at(product.aisle, now)
+        if not product.by_weight:
+            intent = [(ln, x) for x in self.sessions.values() if x.state == "shopping" for ln in x.live_lines
+                      if ln.sku == product.sku and ln.return_ts and now - ln.return_ts <= 180]
+            if intent:
+                ln, x = min(intent, key=lambda lx: lx[0].return_ts)
+                return self._remove_line(x, ln, now, "Put back on the shelf")
         open_picks = sorted((p for p in self.picks.values()
                              if p.status == "open" and p.sku == product.sku and p.shelf_id == shelf_id),
-                            key=lambda p: p.ts)
+                            key=lambda p: (not (set(p.candidates) & here), p.ts))
+        matched_here = [p for p in self.picks.values()
+                        if p.status == "matched" and p.sku == product.sku and p.shelf_id == shelf_id
+                        and p.matched_session in here and now - p.ts <= self.s.return_lookback_s]
+        # A pick still unscanned after half a minute is usually not the one coming back (honest shoppers
+        # scan within seconds): if someone standing here has already scanned this product, it's theirs.
+        fresh_open = open_picks and now - open_picks[0].ts <= 30 and set(open_picks[0].candidates) & here
+        if matched_here and not fresh_open:
+            open_picks = []
         if open_picks:
             pick = open_picks[0]
             if product.by_weight and grams is not None and (pick.grams or 0) - grams > WEIGHT_RESIDUE_G:
@@ -616,7 +821,8 @@ class Engine:
                    if p.status == "matched" and p.sku == product.sku and p.shelf_id == shelf_id
                    and now - p.ts <= self.s.return_lookback_s
                    and self.sessions[p.matched_session].state == "shopping"]
-        matched.sort(key=lambda p: (self.sessions[p.matched_session].aisle == product.aisle, p.ts), reverse=True)
+        matched.sort(key=lambda p: (p.matched_session in here, self.sessions[p.matched_session].aisle == product.aisle,
+                                    p.ts), reverse=True)
         if matched:
             pick = matched[0]
             sess = self.sessions[pick.matched_session]
@@ -665,6 +871,28 @@ class Engine:
         self._update_gauges(now)
         return notes
 
+    def not_me(self, session_id: str, pick_id: str, now: float) -> list[Note]:
+        """The shopper answers a nudge "I didn't take it". On a shared pick they step aside, but only while
+        someone who hasn't said so remains, so nobody can push a pick onto a neighbour just by tapping first.
+        On a pick only they could have taken, it stays theirs and goes to the exit check."""
+        sess = self._get(session_id)
+        pick = self.picks.get(pick_id)
+        if not pick or pick.status != "open" or session_id not in pick.candidates:
+            raise EngineError(404, "Nothing to answer for that item")
+        if session_id not in pick.denied:
+            pick.denied.append(session_id)
+        others = [c for c in pick.candidates if c not in pick.denied]
+        product = self.catalog.get(pick.sku)
+        notes = [self._log(now, "nudge.not_me", f"Shopper says they didn't take the {product.name}", session_id,
+                           pick_id=pick_id)]
+        if others:
+            pick.candidates.remove(session_id)
+            notes.append(Note(f"phone:{session_id}", "resolved", {"pick_id": pick_id, "sku": pick.sku}))
+        else:
+            notes.append(Note(f"phone:{session_id}", "info", {
+                "text": f"Thanks. The shelf can't tell who took the {product.name}, so it'll be checked at the exit."}))
+        return notes + [self._cart_note(sess)]
+
     # ------------------------------------------------------------------ risk
     def assess(self, session_id: str) -> dict:
         sess = self._get(session_id)
@@ -701,6 +929,7 @@ class Engine:
         if any(ln.status == "weighing" for ln in sess.lines):
             raise EngineError(409, "Loose produce is still being weighed: wait a moment, or put it on the produce shelf again")
         sess.state = "at_exit"
+        self._reprice(sess)
         a = self.assess(session_id)
         payload = {
             "sid": sess.session_id,
@@ -895,6 +1124,7 @@ class Engine:
         self.checks.pop(session_id, None)
         sess.age_verified = True  # staff at the desk see the shopper
         sess.pending = {"how": "staff_desk", "clean": False}
+        self._reprice(sess)
         notes.append(self._log(now, "trip.desk", "Trip closed at the staff desk", session_id))
         return notes + self._finalize(sess, now, {"payment_id": f"desk_{secrets.token_hex(5)}", "status": "captured",
                                                   "amount": sess.total, "method": "paid at staff desk",
@@ -919,7 +1149,8 @@ class Engine:
         if sess.state != "exited" or not sess.receipt:
             raise EngineError(409, "Only a paid trip can be refunded")
         lines = [ln for ln in sess.live_lines if ln.line_id in line_ids]
-        amount = sum(ln.price for ln in lines)
+        paid = sess.receipt.get("lines_net", {})
+        amount = sum(paid.get(ln.line_id, ln.price) for ln in lines)  # what the shopper paid, after offers
         if not lines or amount <= 0:
             raise EngineError(400, "Choose at least one paid item to refund")
         provider = sess.receipt.get("provider")
@@ -929,13 +1160,18 @@ class Engine:
         else:
             from .payments import PaymentError
             try:
-                result = self.payments.refund(sess.receipt["payment_id"], amount)
+                result = self.payments.refund(sess.receipt["payment_id"], amount, receipt=sess.receipt)
             except PaymentError as err:
                 raise EngineError(502, f"Refund failed: {err}") from err
         for ln in lines:
             ln.status, ln.note = "refunded", reason or "Refunded"
             self._restock(ln, +1)
-        sess.receipt.setdefault("refunds", []).append({**result, "lines": line_ids, "reason": reason, "ts": now})
+        credit = None
+        if sess.receipt.get("invoice"):
+            credit = self.invoicer.credit_note(sess, sess.receipt["invoice"]["number"], [ln.line_id for ln in lines],
+                                               reason or "Refund", now)
+        sess.receipt.setdefault("refunds", []).append({**result, "lines": line_ids, "reason": reason, "ts": now,
+                                                       "credit_note": credit})
         self.stats["refunds"] += 1
         return [self._log(now, "refund", f"Refunded Rs {amount / 100:.2f} ({reason or 'no reason given'})", session_id),
                 Note(f"phone:{session_id}", "info", {"text": f"Refund of Rs {amount / 100:.2f} is on its way."}),
@@ -967,6 +1203,42 @@ class Engine:
             Note(f"phone:{d['session_id']}", "info", {"text": f"Your dispute was reviewed: {outcome}. {note}".strip()}),
         ]
 
+    # ------------------------------------------------------------------ shopper data (accounts, DPDP)
+    def trips_for(self, shopper_id: str) -> list[dict]:
+        live = list(self.sessions.values())
+        archived = [_session_from(d) for d in self.ledger.archived_trips_for(shopper_id)
+                    if d["session_id"] not in self.sessions]
+        return [{"session_id": x.session_id, "state": x.state, "started": x.created, "total": x.total,
+                 "items": [ln.name for ln in x.live_lines], "invoice": (x.receipt or {}).get("invoice")}
+                for x in live + archived if x.shopper_id == shopper_id]
+
+    def erase_shopper(self, shopper_id: str, now: float) -> tuple[dict, list[Note]]:
+        """Right to erasure. Refused during an unfinished trip (it still has to be paid for)."""
+        mine = [x for x in self.sessions.values() if x.shopper_id == shopper_id]
+        if any(x.state not in ("exited", "cancelled") for x in mine):
+            raise EngineError(409, "Finish or cancel your current trip first")
+        mandate = self.ledger.mandate_for(shopper_id, now)
+        if mandate and hasattr(self.payments, "cancel_mandate"):
+            from .payments import PaymentError
+            try:
+                self.payments.cancel_mandate(mandate["subscription_id"])
+            except PaymentError as err:
+                raise EngineError(502, f"Couldn't cancel UPI Reserve Pay first: {err}") from err
+        counts = self.ledger.erase_shopper(shopper_id)
+        pseudonym = "erased-" + hashlib.sha256(shopper_id.encode()).hexdigest()[:12]
+        for x in mine:
+            x.shopper_id, x.push_token, x.aisle = pseudonym, None, None
+        return counts, [self._log(now, "dpdp.erasure", f"Shopper data erased on request ({len(mine)} trips unlinked)",
+                                  None, **counts)]
+
+    # ------------------------------------------------------------------ staff audit
+    def staff_action(self, username: str, role: str, path: str, now: float) -> list[Note]:
+        """Audit-log one staff action (sign-in or change) by the person who did it."""
+        m = re.search(r"/(?:trips|checks)/(T[0-9A-F]+)", path)
+        action = path.removeprefix("/api/")
+        return [self._log(now, "staff.action", f"{username} ({role}): {action}", m.group(1) if m else None,
+                          staff=username, role=role, action=action)]
+
     # ------------------------------------------------------------------ billing
     def pay_in_app(self, session_id: str, now: float) -> list[Note]:
         """Retry after a failed or abandoned exit payment, from the phone."""
@@ -979,12 +1251,15 @@ class Engine:
         """Bill the trip. Sandbox charges at once; a checkout gateway (Razorpay) asks the phone to
         approve, and the trip finishes in payment_confirmed()."""
         sess.pending = {"how": how, "clean": clean}
+        self._reprice(sess)
         if sess.total == 0:
             return self._finalize(sess, now, {"payment_id": None, "status": "captured", "amount": 0,
                                               "method": "nothing to pay", "mode": self.payments.mode,
                                               "provider": self.payments.name})
         if self.payments.flow == "checkout":
             return self._request_payment(sess, now)
+        if self.payments.flow == "mandate":
+            return self._charge_mandate(sess, now)
         result = self.payments.charge(sess.session_id, sess.total)
         if result["status"] != "captured":
             return self._payment_failed(sess, now, "Your payment didn't go through. Please pay in the app.")
@@ -997,8 +1272,78 @@ class Engine:
         return [
             self._log(now, "payment.failed", f"Exit payment failed: {text}", sess.session_id, level="warn"),
             Note(f"phone:{sess.session_id}", "payment_failed", {"text": text}),
-            Note(f"gate:{sess.gate_id}", "gate", {"light": "amber", "text": "Payment pending on the phone"}),
+            Note(f"gate:{sess.gate_id}", "gate", {"light": "amber", "text": "Please pay at the staff desk"
+                                                  if self.payments.flow == "mandate" else "Payment pending on the phone"}),
         ]
+
+    # ------------------------------------------------------------------ UPI Reserve Pay (mandate)
+    def link_mandate(self, shopper_id: str, shopper_secret: str, customer: dict, upi_id: str | None,
+                     now: float) -> tuple[dict, list[Note]]:
+        """Once per shopper: block funds with UPI Reserve Pay. The shopper approves in their UPI app;
+        the gateway's webhook then marks the mandate ACTIVE."""
+        from .payments import PaymentError
+        if self.payments.flow != "mandate":
+            raise EngineError(409, "This store isn't using UPI Reserve Pay")
+        if not self.ledger.check_shopper(shopper_id, shopper_secret):
+            raise EngineError(401, "Unknown shopper")
+        try:
+            m = self.payments.create_mandate(shopper_id, customer, upi_id, now)
+        except PaymentError as err:
+            raise EngineError(502, str(err)) from err
+        self.ledger.save_mandate(m["subscription_id"], shopper_id, "PENDING", now, now + 89 * 86400)
+        return m, [self._log(now, "mandate.requested", "Reserve Pay authorisation sent to the shopper's UPI app",
+                             subscription=m["subscription_id"])]
+
+    def mandate_status(self, shopper_id: str, shopper_secret: str, now: float) -> dict:
+        if not self.ledger.check_shopper(shopper_id, shopper_secret):
+            raise EngineError(401, "Unknown shopper")
+        return self.ledger.mandate_for(shopper_id, now) or {"status": "NONE"}
+
+    def _charge_mandate(self, sess: Session, now: float) -> list[Note]:
+        from .payments import PaymentError
+        mandate = self.ledger.mandate_for(sess.shopper_id, now)
+        if not mandate or mandate["status"] != "ACTIVE":
+            return self._payment_failed(sess, now, "UPI Reserve Pay isn't active for you yet. Please pay at the staff desk.")
+        if sess.total > self.payments.max_amount_paise:
+            return self._payment_failed(sess, now, "This basket is above your Reserve Pay limit. Please pay at the staff desk.")
+        try:
+            result = self.payments.charge(mandate["subscription_id"], sess.session_id, sess.total, now)
+        except PaymentError as err:
+            return self._payment_failed(sess, now, f"The Reserve Pay debit didn't go through ({err}). Please pay at the desk.")
+        result["subscription_id"] = mandate["subscription_id"]
+        return self._finalize(sess, now, result)
+
+    def cashfree_webhook(self, event_type: str, body: dict, now: float) -> list[Note]:
+        """Signature-checked Cashfree webhook: mandate approvals and debit results."""
+        def find(d, key):
+            if isinstance(d, dict):
+                if key in d:
+                    return d[key]
+                for v in d.values():
+                    found = find(v, key)
+                    if found is not None:
+                        return found
+            return None
+
+        sub_id = find(body, "subscription_id")
+        if event_type == "SUBSCRIPTION_AUTH_STATUS":
+            status = find(body, "subscription_status") or ("ACTIVE" if find(body, "payment_status") == "SUCCESS" else "FAILED")
+            if sub_id and self.ledger.set_mandate_status(sub_id, status):
+                return [self._log(now, "mandate.status", f"Reserve Pay mandate {sub_id} is {status}", subscription=sub_id)]
+            return []
+        if event_type == "SUBSCRIPTION_PAYMENT_SUCCESS":
+            return [self._log(now, "mandate.debited", f"Reserve Pay debit {find(body, 'payment_id')} succeeded",
+                              subscription=sub_id)]
+        if event_type == "SUBSCRIPTION_PAYMENT_FAILED":
+            pid = str(find(body, "payment_id") or "")
+            sess = next((s for s in self.sessions.values() if s.receipt and s.receipt.get("payment_id") == pid), None)
+            if sess:
+                sess.receipt["gateway_status"] = "FAILED"
+            return [self._log(now, "mandate.debit_failed",
+                              f"Reserve Pay debit {pid} FAILED after the shopper left: collect from trip "
+                              f"{sess.session_id if sess else 'unknown'} (follow up with the shopper)",
+                              sess.session_id if sess else None, level="warn")]
+        return []
 
     def _request_payment(self, sess: Session, now: float) -> list[Note]:
         from .payments import PaymentError
@@ -1056,8 +1401,24 @@ class Engine:
         sess.state = "exited"
         for ln in sess.live_lines:
             self._restock(ln, -1)
+        pricing = self._reprice(sess)
+        invoice = self.invoicer.issue(sess, pricing, result, {p.sku: p for p in self.catalog.all()}, now)
+        if pricing["points_redeemed"]:
+            self.ledger.add_points(sess.shopper_id, -pricing["points_redeemed"])
+        balance = self.ledger.add_points(sess.shopper_id, pricing["points_earned"])
+        if pricing["coupon"] and pricing["coupon"]["applied"]:
+            self.ledger.use_coupon(sess.shopper_id, pricing["coupon"]["code"], now)
         sess.receipt = {**result, "items": [ln.public() for ln in sess.live_lines],
-                        "total": sess.total, "how": how, "ts": now}
+                        "subtotal": pricing["subtotal"], "discounts": pricing["discounts"], "gst": pricing["gst"],
+                        "lines_net": {pl["line_id"]: pl["net"] for pl in pricing["lines"]},
+                        "points": {"earned": pricing["points_earned"], "redeemed": pricing["points_redeemed"],
+                                   "balance": balance},
+                        "invoice": invoice, "total": sess.total, "how": how, "ts": now}
+        for listener in self.invoice_listeners:
+            try:
+                listener(sess, invoice)
+            except Exception as err:  # a mail outage must never block the exit
+                log.warning("Invoice listener failed: %s", err)
         streak = self.ledger.clean_streak(sess.shopper_id)
         self.ledger.set_clean_streak(sess.shopper_id, streak + 1 if clean else 0)
         self.checks.pop(sess.session_id, None)
@@ -1165,6 +1526,23 @@ class Engine:
             alert("unattributed", "info", f"{self.stats['unattributed']} shelf picks happened with no shopper in the store")
         if not cloud_online:
             alert("cloud", "bad", "Cloud unreachable: gateway is buffering events and checking tokens offline")
+        gates = [{**g, "age_s": round(now - g["last_seen"], 1), "ok": now - g["last_seen"] <= 60} for g in self.gates.values()]
+        for g in gates:
+            gid = g["gate_id"]
+            if not g["ok"]:
+                alert(f"gate:{gid}", "bad", f"Gate agent {gid} silent for {g['age_s']:.0f} s: check the gate's Pi and turnstile")
+                continue
+            if g.get("camera") is False:
+                alert(f"gate_camera:{gid}", "warn", f"Gate {gid}: QR camera not working, shoppers must tap by NFC")
+            if (g.get("offline_queue") or 0) > 0:
+                alert(f"gate_queue:{gid}", "warn", f"Gate {gid} let {g['offline_queue']} trip(s) out offline: not billed yet")
+        edges = [{**e, "age_s": round(now - e["last_seen"], 1), "ok": now - e["last_seen"] <= 120} for e in self.edges.values()]
+        for e in edges:
+            eid = e["edge_id"]
+            if not e["ok"]:
+                alert(f"edge:{eid}", "bad", f"Store edge {eid} silent for {e['age_s']:.0f} s: shelf events from that store aren't arriving")
+            elif (e.get("outbox") or 0) > 200:
+                alert(f"edge_backlog:{eid}", "warn", f"Store edge {eid} has {e['outbox']} shelf messages waiting")
 
         active = [x for x in self.sessions.values() if x.state not in ("exited", "cancelled")]
         return {
@@ -1184,6 +1562,8 @@ class Engine:
             "presence_active": self.presence_active(now),
             "stats": self.stats,
             "stations": stations,
+            "gates": gates,
+            "edges": edges,
             "alerts": alerts,
             "checks": list(self.checks.values()),
             "disputes": [d for d in self.disputes.values() if d["status"] == "open"],

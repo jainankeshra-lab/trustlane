@@ -1,0 +1,100 @@
+{
+  "expo": {
+    "name": "TrustLane",
+    "slug": "trustlane",
+    "scheme": "trustlane",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "app.trustlane.shopper",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "TrustLane connects to the store's server on the local network.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "app.trustlane.shopper",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_ADVERTISE",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.NFC"
+      ],
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": [
+            "peripheral",
+            "central"
+          ],
+          "bluetoothAlwaysPermission": "TrustLane listens for aisle beacons and lets the store's shelves recognise your phone while you shop."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "TrustLane uses the camera to scan product barcodes and check the package matches. Photos stay on your phone.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#17765A"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "onnxruntime-react-native",
+      [
+        "react-native-nfc-manager",
+        {
+          "nfcPermission": "TrustLane reads the NFC tag at the exit gate when you tap your phone.",
+          "includeNdefEntitlement": false
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "defaultServerUrl": "http://192.168.1.10:8000",
+      "eas": {
+        "projectId": ""
+      }
+    }
+  }
+}

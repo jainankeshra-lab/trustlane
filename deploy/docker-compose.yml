@@ -1,0 +1,59 @@
+# Production layout: one TrustLane server per store (stores never share live state), behind Caddy
+# for automatic HTTPS. Add a store: copy a storeN service + volume, add its hostname to the Caddyfile.
+#
+#   cd deploy
+#   cp ../.env.example store1.env   # and store2.env: keys, staff PIN, gate/station keys per store
+#   DOMAIN=trustlane.example ACME_EMAIL=ops@trustlane.example docker compose up -d --build
+#
+# Point store1.trustlane.example and store2.trustlane.example (DNS A records) at this host first.
+
+x-store: &store
+  build: ..
+  image: trustlane-server:latest
+  restart: unless-stopped
+  networks: [internal]
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  store1:
+    <<: *store
+    env_file: store1.env
+    environment:
+      TRUSTLANE_STORE_ID: store-1
+      TRUSTLANE_PUBLIC_URL: https://store1.${DOMAIN}
+    volumes: [store1-data:/data]
+
+  store2:
+    <<: *store
+    env_file: store2.env
+    environment:
+      TRUSTLANE_STORE_ID: store-2
+      TRUSTLANE_PUBLIC_URL: https://store2.${DOMAIN}
+    volumes: [store2-data:/data]
+
+  caddy:
+    image: caddy:2.8.4
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    networks: [internal]
+    depends_on: [store1, store2]
+
+  # In each store (not in the cloud): the edge gateway, pointing at that store's cloud server.
+  #   docker run -d --restart unless-stopped -p 8100:8100 -v edge-data:/data trustlane-server:latest \
+  #     python -m server.edge --cloud https://store1.trustlane.example --port 8100 --data /data/edge
+
+volumes:
+  store1-data:
+  store2-data:
+  caddy-data:
+
+networks:
+  internal:

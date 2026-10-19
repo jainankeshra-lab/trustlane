@@ -1,0 +1,7 @@
+# Exit gate agent (Raspberry Pi or PC at the gate)
+httpx>=0.27
+websockets>=12
+cryptography>=42
+pyserial>=3.5          # --driver serial (ESP32 gate board)
+opencv-python>=4.9     # --camera (exit QR codes)
+# gpiozero>=2.0        # --driver gpio, on a Raspberry Pi

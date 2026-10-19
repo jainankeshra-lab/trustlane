@@ -73,3 +73,39 @@ groups:
         for: 10m
         labels: {severity: warn}
         annotations: {summary: "More than 5 shelf picks unscanned past the match window"}
+
+  - name: trustlane-store-devices
+    rules:
+      - alert: StoreEdgeDown
+        expr: up{job="trustlane-edge"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations: {summary: "Store edge {{ $labels.store }} not answering: shelf events and gates in that store have no gateway"}
+
+      - alert: StoreEdgeCloudUnreachable
+        expr: trustlane_edge_cloud_online == 0
+        for: 2m
+        labels: {severity: page}
+        annotations: {summary: "Store edge {{ $labels.store }} can't reach the cloud: it is holding events and checking exits offline"}
+
+      - alert: StoreEdgeBacklog
+        expr: trustlane_edge_outbox > 200
+        for: 5m
+        labels: {severity: warn}
+        annotations: {summary: "{{ $value }} shelf messages waiting at store edge {{ $labels.store }}"}
+
+      - alert: OfflineExitsNotBilled
+        expr: trustlane_edge_offline_exits > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations: {summary: "{{ $value }} exits let through offline at {{ $labels.store }} still not billed after 15 min"}
+
+      - alert: GateAgentSilent
+        expr: time() - trustlane_gate_last_seen_seconds > 60
+        labels: {severity: page}
+        annotations: {summary: "Gate agent {{ $labels.gate }} silent for a minute: check the gate's Pi and turnstile"}
+
+      - alert: StoreEdgeSilentAtCloud
+        expr: time() - trustlane_edge_last_seen_seconds > 120
+        labels: {severity: page}
+        annotations: {summary: "The cloud hasn't heard from store edge {{ $labels.edge }} for 2 min"}

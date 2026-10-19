@@ -1,0 +1,54 @@
+{
+  "_note": "Store offers. Amounts in paise. Types: buy_x_get_y, bundle, percent (line offers), basket. Coupons: basket or percent, entered by the shopper. Edit here or in the ops console.",
+  "promotions": [
+    {
+      "id": "gum-3-for-2",
+      "type": "buy_x_get_y",
+      "sku": "gum",
+      "buy": 2,
+      "get": 1,
+      "label": "Gum: buy 2, get 1 free"
+    },
+    {
+      "id": "breakfast",
+      "type": "bundle",
+      "skus": [
+        "milk",
+        "bread"
+      ],
+      "price": 11000,
+      "label": "Milk + bread for Rs 110"
+    },
+    {
+      "id": "choc-10",
+      "type": "percent",
+      "skus": [
+        "chocolate"
+      ],
+      "percent": 10,
+      "label": "10% off chocolate"
+    },
+    {
+      "id": "basket-500",
+      "type": "basket",
+      "min_total": 50000,
+      "off": 2500,
+      "label": "Rs 25 off above Rs 500"
+    }
+  ],
+  "coupons": [
+    {
+      "code": "WELCOME50",
+      "type": "basket",
+      "min_total": 20000,
+      "off": 5000,
+      "once_per_shopper": true,
+      "label": "WELCOME50: Rs 50 off your first basket above Rs 200"
+    }
+  ],
+  "loyalty": {
+    "earn_per_100_rupees": 1,
+    "point_value_paise": 100,
+    "min_redeem": 50
+  }
+}

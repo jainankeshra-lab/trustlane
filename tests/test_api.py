@@ -14,6 +14,7 @@ def make_settings(tmp_path, **overrides):
     settings.data_dir = tmp_path
     settings.payments_provider = "sandbox"  # never call a real gateway from tests, even if .env has keys
     settings.staff_pin = "4321"
+    settings.package_model_path = tmp_path / "no-package-model.onnx"  # tests opt in to a model
     for k, v in overrides.items():
         setattr(settings, k, v)
     return settings

@@ -25,7 +25,14 @@
   dialog::backdrop { background: rgba(16,32,27,.35); }
   dialog .inner { padding: 18px; display: flex; flex-direction: column; gap: 12px; max-height: 84vh; overflow: auto; }
   input[type=text] { font: inherit; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid2 label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .grid2 label.check { flex-direction: row; align-items: center; }
+  .grid2 .span2 { grid-column: span 2; }
+  .grid2 input, .grid2 select { font: inherit; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .wrap-x { overflow-x: auto; }
   @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+  @media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } .grid2 .span2 { grid-column: auto; } }
 </style>
 </head>
 <body>
@@ -39,6 +46,8 @@
       <button id="network"></button>
       <button id="verify">Verify audit log</button>
       <a class="small" href="/metrics" target="_blank" rel="noopener">/metrics</a>
+      <span class="small muted" id="who"></span>
+      <button class="small ghost" id="signout">Sign out</button>
     </div>
   </div>
 
@@ -69,6 +78,11 @@
         <table><thead><tr><th>Station</th><th>Shelf</th><th>Last report</th><th>Health</th><th>Status</th></tr></thead>
           <tbody id="stations"></tbody></table>
       </div>
+      <div class="card stack">
+        <h2>Exit gates &amp; store edge</h2>
+        <table><thead><tr><th>Device</th><th>Last report</th><th>Details</th><th>Status</th></tr></thead>
+          <tbody id="devices"></tbody></table>
+      </div>
     </div>
     <div class="stack">
       <div class="card stack">
@@ -80,15 +94,62 @@
         <div class="stack small" id="sent"></div>
       </div>
       <div class="card stack">
-        <div class="spread"><h2>Stock &amp; catalog</h2><a class="small" href="#" id="sales">Download sales CSV</a></div>
-        <table class="small"><thead><tr><th>Product</th><th class="num">Stock</th><th class="num">Price</th><th class="num">Learned weight</th></tr></thead>
-          <tbody id="stock"></tbody></table>
+        <div class="spread"><h2>Model review</h2><button class="small" id="retrain">Retrain model</button></div>
+        <div class="small muted" id="review-counts"></div>
+        <div class="stack small" id="review"></div>
+        <pre class="small mono" id="retrain-log" style="white-space:pre-wrap;margin:0;max-height:140px;overflow:auto"></pre>
+      </div>
+      <div class="card stack" id="staff-card" hidden>
+        <div class="spread"><h2>Staff accounts</h2><span class="muted small">Admins only</span></div>
+        <table class="small"><thead><tr><th>User</th><th>Role</th><th>Status</th><th></th></tr></thead>
+          <tbody id="staff-rows"></tbody></table>
+        <form class="row small" id="staff-add" style="flex-wrap:wrap;gap:6px">
+          <input type="text" name="username" placeholder="username" required size="10" autocomplete="off" aria-label="New username">
+          <input type="text" name="name" placeholder="full name" size="12" aria-label="Full name">
+          <select name="role" aria-label="Role"><option>associate</option><option>supervisor</option><option>admin</option></select>
+          <input type="password" name="password" placeholder="password (8+)" required minlength="8" size="12" autocomplete="new-password" aria-label="Password"
+            style="font:inherit;padding:8px 10px;border-radius:10px;border:1px solid var(--line)">
+          <button class="primary">Add</button>
+        </form>
+      </div>
+      <div class="card stack">
+        <div class="spread"><h2>Stock &amp; catalog</h2>
+          <span class="row" style="gap:8px"><button class="small" id="add-product" data-sup>Add product</button>
+          <a class="small" href="#" id="sales">Download sales CSV</a></span></div>
+        <div class="wrap-x"><table class="small"><thead><tr><th>Product</th><th>Shelf · lane</th><th class="num">Stock</th><th class="num">Price</th><th>GST</th><th class="num">Learned weight</th><th></th></tr></thead>
+          <tbody id="stock"></tbody></table></div>
+      </div>
+      <div class="card stack">
+        <div class="spread"><h2>Offers, coupons &amp; points</h2><button class="small" id="save-offers" data-sup>Save offers</button></div>
+        <p class="small muted" style="margin:0">Types: buy_x_get_y, bundle, percent, basket. Amounts in paise. Saved offers apply to carts at once.</p>
+        <textarea id="offers" spellcheck="false" aria-label="Offers JSON" class="mono small" style="min-height:220px;width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--card);color:var(--ink)"></textarea>
       </div>
     </div>
   </div>
 </main>
 
 <dialog id="trip"><div class="inner" id="trip-body"></div></dialog>
+<dialog id="product"><form class="inner" id="product-form" method="dialog">
+  <h2 id="product-title">Product</h2>
+  <div class="grid2">
+    <label>SKU<input name="sku" required></label>
+    <label>Barcode (EAN / PLU)<input name="barcode" required inputmode="numeric"></label>
+    <label class="span2">Name<input name="name" required></label>
+    <label>Price (Rs, GST incl.; per kg if by weight)<input name="price" type="number" step="0.01" min="0" required></label>
+    <label>Unit weight (g)<input name="unit_weight_g" type="number" step="0.1" min="0.1" required></label>
+    <label>Sold by<select name="sold_by"><option value="unit">unit</option><option value="weight">weight</option></select></label>
+    <label>Theft risk<select name="theft"><option>low</option><option>medium</option><option>high</option></select></label>
+    <label>Aisle<input name="aisle" required></label>
+    <label>Shelf (empty = not monitored)<input name="shelf_id" placeholder="S7-A"></label>
+    <label>Lane<input name="lane" type="number" min="0" max="15"></label>
+    <label>HSN code<input name="hsn" inputmode="numeric"></label>
+    <label>GST %<select name="gst_rate"><option value="">outside GST</option><option>0</option><option>5</option><option selected>18</option><option>40</option><option>3</option><option>0.25</option><option>12</option><option>28</option></select></label>
+    <label class="check"><input type="checkbox" name="age_restricted"> Age-restricted (ID check)</label>
+  </div>
+  <p class="small" id="product-error" role="alert" style="color:var(--red);margin:0"></p>
+  <div class="row"><button class="primary" value="save">Save</button><button type="button" id="product-delete" class="danger">Delete</button>
+    <button type="button" id="product-cancel">Cancel</button></div>
+</form></dialog>
 
 <script src="/static/common.js"></script>
 <script>
@@ -133,6 +194,13 @@ function render(s) {
       <td class="small">${st.camera_fps != null ? st.camera_fps + " fps · " : ""}drift ${drift.toFixed(1)} g${st.outbox ? " · " + st.outbox + " queued" : ""}${st.battery_pct != null ? " · " + st.battery_pct + "%" : ""}</td>
       <td><span class="chip ${st.ok ? "ok" : "bad"}">${st.ok ? "Reporting" : "Silent: shelf unverified"}</span></td></tr>`;
   }).join("") || `<tr><td colspan="5" class="muted">No station has reported yet.</td></tr>`;
+  const devices = (s.gates || []).map((g) => `<tr><td>Gate <span class="mono">${TL.esc(g.gate_id)}</span></td><td>${g.age_s.toFixed(0)} s ago</td>
+      <td class="small">${TL.esc(g.driver || "")}${g.scale_g != null ? ` · scale ${Math.round(g.scale_g)} g` : ""}${g.camera === false ? " · camera down" : ""}${g.offline_queue ? ` · ${g.offline_queue} offline exits` : ""}</td>
+      <td><span class="chip ${g.ok ? "ok" : "bad"}">${g.ok ? "Reporting" : "Silent"}</span></td></tr>`).concat(
+    (s.edges || []).map((e) => `<tr><td>Edge <span class="mono">${TL.esc(e.edge_id)}</span></td><td>${e.age_s.toFixed(0)} s ago</td>
+      <td class="small">${e.outbox} queued · ${e.offline_exits} offline exits · ${e.forwarded} forwarded</td>
+      <td><span class="chip ${e.ok ? (e.outbox > 200 ? "warn" : "ok") : "bad"}">${e.ok ? "Reporting" : "Silent"}</span></td></tr>`));
+  $("devices").innerHTML = devices.join("") || `<tr><td colspan="4" class="muted">No gate agent or store edge has reported (the web gate screen doesn't).</td></tr>`;
   $("feed").innerHTML = s.feed.map((f) => `<div><span class="muted">${TL.clock(f.ts)}</span>
     <span class="chip ${f.level === "warn" ? "warn" : f.level === "bad" ? "bad" : ""}">${TL.esc(f.kind)}</span>
     ${f.session_id ? `<span class="mono">${f.session_id}</span>` : ""} ${TL.esc(f.text)}</div>`).join("");
@@ -175,14 +243,111 @@ function renderDisputes(s) {
       <span class="muted">Refunds: open the trip</span></div></div>`).join("") : `<span class="muted">No open disputes.</span>`;
 }
 
+let catalog = [];
 async function renderStock() {
   try {
     const rows = (await TL.staffApi("/api/erp/stock")).data;
+    catalog = (await TL.api("/api/catalog")).data;
+    const bySku = Object.fromEntries(catalog.map((p) => [p.sku, p]));
     const learned = (last && last.learned_weights) || {};
-    $("stock").innerHTML = rows.map((r) => `<tr><td>${TL.esc(r.name)}</td><td class="num">${r.stock} ${r.unit === "kg" ? "kg" : ""}</td>
+    const sup = TL.staffUser() && TL.staffUser().role !== "associate";
+    $("stock").innerHTML = rows.map((r) => {
+      const p = bySku[r.sku] || {};
+      return `<tr><td>${TL.esc(r.name)}<br><span class="mono muted">${TL.esc(p.barcode || "")}</span></td>
+      <td>${p.shelf_id ? `${TL.esc(p.shelf_id)} · ${p.lane}` : `<span class="muted">aisle ${TL.esc(p.aisle || "")}</span>`}</td>
+      <td class="num">${r.stock} ${r.unit === "kg" ? "kg" : ""}</td>
       <td class="num">${TL.rupees(r.price)}${r.unit === "kg" ? "/kg" : ""}</td>
-      <td class="num">${learned[r.sku] ? learned[r.sku].mean + " g (" + learned[r.sku].n + ")" : "–"}</td></tr>`).join("");
-  } catch { /* PIN prompt pending */ }
+      <td>${p.gst_rate === null || p.gst_rate === undefined ? "outside" : p.gst_rate + "%"}${p.hsn ? `<br><span class="muted">HSN ${TL.esc(p.hsn)}</span>` : ""}</td>
+      <td class="num">${learned[r.sku] ? learned[r.sku].mean + " g (" + learned[r.sku].n + ")" : "–"}</td>
+      <td>${sup ? `<button class="small" data-edit="${TL.esc(r.sku)}">Edit</button>` : ""}</td></tr>`;
+    }).join("");
+  } catch { /* sign-in pending */ }
+}
+
+// ---------- catalog editor (supervisors)
+let editingSku = null;
+function openProduct(p) {
+  editingSku = p ? p.sku : null;
+  const f = $("product-form");
+  f.reset();
+  $("product-title").textContent = p ? `Edit ${p.name}` : "Add product";
+  $("product-delete").hidden = !p;
+  $("product-error").textContent = "";
+  if (p) {
+    for (const k of ["sku", "barcode", "name", "unit_weight_g", "sold_by", "theft", "aisle", "hsn"]) f[k].value = p[k] ?? "";
+    f.price.value = (p.price / 100).toFixed(2);
+    f.shelf_id.value = p.shelf_id || "";
+    f.lane.value = p.lane ?? "";
+    f.gst_rate.value = p.gst_rate === null ? "" : String(p.gst_rate);
+    f.age_restricted.checked = !!p.age_restricted;
+  }
+  $("product").showModal();
+}
+$("product-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    sku: f.sku.value.trim(), barcode: f.barcode.value.trim(), name: f.name.value.trim(),
+    price: Math.round(parseFloat(f.price.value) * 100), unit_weight_g: parseFloat(f.unit_weight_g.value),
+    sold_by: f.sold_by.value, theft: f.theft.value, aisle: f.aisle.value.trim(),
+    shelf_id: f.shelf_id.value.trim() || null, lane: f.lane.value === "" ? null : Number(f.lane.value),
+    hsn: f.hsn.value.trim() || null, gst_rate: f.gst_rate.value === "" ? null : Number(f.gst_rate.value),
+    age_restricted: f.age_restricted.checked, replacing: editingSku,
+  };
+  try { await TL.staffApi("/api/catalog/products", body); $("product").close(); TL.toast(`Saved ${body.name}`); renderStock(); }
+  catch (err) { $("product-error").textContent = err.message; }
+});
+$("product-cancel").onclick = () => $("product").close();
+$("product-delete").onclick = async () => {
+  if (!editingSku || !window.confirm(`Delete ${editingSku} from the catalog?`)) return;
+  try { await TL.staffApi(`/api/catalog/products/${encodeURIComponent(editingSku)}`, undefined, "DELETE"); $("product").close(); renderStock(); }
+  catch (err) { $("product-error").textContent = err.message; }
+};
+$("add-product").onclick = () => openProduct(null);
+$("stock").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-edit]");
+  if (b) openProduct(catalog.find((p) => p.sku === b.dataset.edit));
+});
+
+// ---------- offers editor
+async function loadOffers() {
+  try { $("offers").value = JSON.stringify((await TL.staffApi("/api/ops/offers")).data, null, 2); } catch { /* sign-in pending */ }
+}
+$("save-offers").onclick = async () => {
+  let raw;
+  try { raw = JSON.parse($("offers").value); } catch (err) { return TL.toast("Not valid JSON: " + err.message, "bad"); }
+  try { await TL.staffApi("/api/ops/offers", raw, "PUT"); TL.toast("Offers saved and live"); loadOffers(); }
+  catch (err) { TL.toast(err.message, "bad"); }
+};
+
+// ---------- model review: label camera snapshots where YOLO and the load cell disagreed
+let reviewKey = null;
+async function renderReview() {
+  let r;
+  try { r = (await TL.staffApi("/api/vision/review")).data; } catch { return; }
+  const counts = Object.entries(r.training_images).map(([k, v]) => `${k} ${v}`).join(" · ");
+  $("review-counts").textContent = `${r.to_review} to review · ${r.labelled} labelled · training set: ${counts || "empty"}`;
+  $("retrain").disabled = r.retrain.running;
+  $("retrain").textContent = r.retrain.running ? "Training…" : "Retrain model";
+  $("retrain-log").textContent = r.retrain.log_tail || "";
+  const key = r.pending.map((p) => p.id).join("|");
+  if (key === reviewKey) return;
+  reviewKey = key;
+  $("review").innerHTML = r.pending.length ? r.pending.slice(0, 6).map((p) => `
+    <div class="row" data-review="${p.id}">
+      <img data-src="/api/vision/review/${p.id}.jpg" alt="Hand crop from ${p.shelf_id}" width="72" height="72" style="border-radius:8px;object-fit:cover;background:var(--chip)">
+      <div class="stack" style="gap:4px">
+        <span>${p.shelf_id} · lane says <b>${p.lane_sku}</b>, camera said <b>${p.camera_sku}</b></span>
+        <div class="row">
+          <button class="small" data-label="${p.lane_sku}">It's ${p.lane_sku}</button>
+          <button class="small" data-label="${p.camera_sku}">It's ${p.camera_sku}</button>
+          <button class="small" data-label="empty">Empty hand</button>
+          <button class="small ghost" data-label="discard">Discard</button>
+        </div></div></div>`).join("") : `<span class="muted">Nothing to review.</span>`;
+  for (const img of $("review").querySelectorAll("img[data-src]")) {  // images need the staff PIN header
+    const res = await fetch(img.dataset.src, { headers: TL.staffHeaders() });
+    if (res.ok) img.src = URL.createObjectURL(await res.blob());
+  }
 }
 
 // ---------- trip detail and staff actions
@@ -251,6 +416,12 @@ document.addEventListener("click", async (e) => {
       await TL.staffApi(`/api/ops/checks/${card.dataset.sid}/resolve`, { outcome: b.dataset.resolve, take: b.dataset.resolve === "items_added" ? take : [] });
     } else if (b.dataset.verify) {
       await TL.staffApi(`/api/ops/trips/${b.dataset.verify}/verify-id`, {});
+    } else if (b.dataset.label) {
+      await TL.staffApi(`/api/vision/review/${b.closest("[data-review]").dataset.review}`, { label: b.dataset.label });
+      reviewKey = null; renderReview();
+    } else if (b.id === "retrain") {
+      await TL.staffApi("/api/vision/retrain", { epochs: 20 });
+      renderReview();
     } else if (b.dataset.dispute) {
       const note = (window.prompt && window.prompt("Note for the shopper")) || "";
       await TL.staffApi(`/api/ops/disputes/${b.dataset.dispute}/resolve`, { outcome: b.dataset.outcome, note, refund_lines: [] });
@@ -258,19 +429,77 @@ document.addEventListener("click", async (e) => {
   } catch (err) { TL.toast(err.message, "bad"); }
   refresh();
 });
+// ---------- who is signed in, and staff accounts (admins)
+function showWho() {
+  const u = TL.staffUser();
+  if (!u) return;
+  $("who").textContent = `${u.name} · ${u.role}`;
+  $("staff-card").hidden = u.role !== "admin";
+  for (const id of ["network", "verify", "retrain", "sales", "add-product", "save-offers"]) $(id).hidden = u.role === "associate";  // supervisor tools
+  $("offers").readOnly = u.role === "associate";
+  if (u.role === "admin") renderStaff();
+}
+async function renderStaff() {
+  let users;
+  try { users = (await TL.staffApi("/api/staff/users")).data; } catch { return; }
+  const me = TL.staffUser().username;
+  $("staff-rows").innerHTML = users.length ? users.map((u) => `
+    <tr data-user="${TL.esc(u.username)}"><td><b>${TL.esc(u.name)}</b><br><span class="mono muted">${TL.esc(u.username)}</span></td>
+      <td><select data-role aria-label="Role for ${TL.esc(u.username)}" ${u.username === me ? "disabled" : ""}>${["associate", "supervisor", "admin"]
+        .map((r) => `<option ${r === u.role ? "selected" : ""}>${r}</option>`).join("")}</select></td>
+      <td><span class="chip ${u.active ? "ok" : "bad"}">${u.active ? "active" : "disabled"}</span></td>
+      <td class="row" style="gap:4px"><button class="small" data-reset>Reset password</button>
+        ${u.username === me ? "" : `<button class="small" data-active="${u.active ? "0" : "1"}">${u.active ? "Disable" : "Enable"}</button>`}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="muted">No accounts yet. Add one per person; the setup PIN is only for this.</td></tr>`;
+}
+async function updateStaff(username, body) {
+  try { await TL.staffApi(`/api/staff/users/${encodeURIComponent(username)}`, body); TL.toast("Saved"); }
+  catch (err) { TL.toast(err.message, "bad"); }
+  renderStaff();
+}
+$("staff-rows").addEventListener("change", (e) => {
+  if (e.target.matches("[data-role]")) updateStaff(e.target.closest("[data-user]").dataset.user, { role: e.target.value });
+});
+$("staff-rows").addEventListener("click", (e) => {
+  const row = e.target.closest("[data-user]");
+  if (!row) return;
+  if (e.target.matches("[data-active]")) updateStaff(row.dataset.user, { active: e.target.dataset.active === "1" });
+  if (e.target.matches("[data-reset]")) {
+    const pw = window.prompt(`New password for ${row.dataset.user} (8+ characters)`);
+    if (pw) updateStaff(row.dataset.user, { password: pw });
+  }
+});
+$("staff-add").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await TL.staffApi("/api/staff/users", { username: f.username.value, name: f.name.value, role: f.role.value, password: f.password.value });
+    TL.toast(`Added ${f.username.value}`);
+    f.reset();
+  } catch (err) { TL.toast(err.message, "bad"); }
+  renderStaff();
+});
+$("signout").onclick = () => TL.staffSignOut();
+
 $("sales").onclick = async (e) => {
   e.preventDefault();
-  const res = await fetch("/api/erp/sales.csv", { headers: { "X-Staff-Pin": TL.staffPin() } });
+  const res = await fetch("/api/erp/sales.csv", { headers: TL.staffHeaders() });
   const url = URL.createObjectURL(await res.blob());
   Object.assign(document.createElement("a"), { href: url, download: "trustlane-sales.csv" }).click();
 };
 
-TL.staffPin();
-TL.socket("ops", () => refresh(), (on) => $("live").classList.toggle("on", on), () => ({ pin: TL.staffPin() }));
+(async () => {
+  if (!TL.staffUser()) await TL.staffSignIn();
+  showWho();
+  TL.socket("ops", () => refresh(), (on) => $("live").classList.toggle("on", on), () => TL.staffSocketQuery());
+})();
 refresh();
 renderStock();
+renderReview();
+loadOffers();
 setInterval(refresh, 2000);
 setInterval(renderStock, 10000);
+setInterval(renderReview, 5000);
 </script>
 </body>
 </html>

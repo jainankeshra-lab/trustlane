@@ -42,6 +42,31 @@
       <label><input type="checkbox" id="consent"> I understand and agree</label>
     </div>
     <button class="primary" id="start" disabled>Scan entry QR · start trip</button>
+    <details class="card small" id="account-card">
+      <summary><b>Your account</b> <span class="muted" id="account-state">not signed in</span></summary>
+      <div class="stack" style="margin-top:10px" id="account-body">
+        <div class="stack" id="signin-box">
+          <span>Sign in with your mobile number to keep your receipts and points on any phone.</span>
+          <label class="stack" style="gap:4px">Mobile number<input id="acct-phone" inputmode="tel" autocomplete="tel" class="field" placeholder="98765 43210"></label>
+          <button id="acct-send">Send code</button>
+          <label class="stack" style="gap:4px" hidden id="acct-code-row">6-digit code<input id="acct-code" inputmode="numeric" autocomplete="one-time-code" class="field" maxlength="6"></label>
+          <button class="primary" id="acct-verify" hidden>Sign in</button>
+        </div>
+        <div class="stack" id="profile-box" hidden>
+          <label class="stack" style="gap:4px">E-mail for invoices<input id="acct-email" type="email" autocomplete="email" class="field"></label>
+          <button id="acct-save">Save</button>
+          <div><b>Loyalty points:</b> <span id="acct-points">0</span></div>
+          <div><b>Receipts</b><div id="acct-receipts" class="stack" style="gap:4px;margin-top:4px"></div></div>
+        </div>
+        <div class="stack" style="border-top:1px solid var(--line);padding-top:10px">
+          <b>Your data (DPDP Act 2023)</b>
+          <button id="acct-export">Download my data</button>
+          <button class="danger" id="acct-delete">Delete my account and data</button>
+          <span class="muted" id="grievance"></span>
+        </div>
+        <p class="small" id="acct-msg" role="status" style="margin:0"></p>
+      </div>
+    </details>
     <p class="muted small" style="margin:0" id="pay-mode">Prototype: payments run in test mode, no money moves.</p>
   </section>
 
@@ -56,6 +81,14 @@
     <div id="id-banner" class="banner warn small" hidden>An item in your cart is age-restricted. Please show your ID to a team member before you leave.</div>
     <div id="nudges" class="stack"></div>
 
+    <div class="card stack small" id="rp-card" hidden>
+      <div class="spread"><b>UPI Reserve Pay</b><span class="chip" id="rp-chip">not linked</span></div>
+      <span id="rp-text">Block funds once (up to the limit, for 90 days). Each trip is then debited at the gate: no tap, no PIN. Unused funds are released.</span>
+      <input id="rp-upi" placeholder="your UPI ID, e.g. success@upi (optional)" autocomplete="off" style="padding:10px;border-radius:10px;border:1px solid var(--line)">
+      <button id="rp-link">Link Reserve Pay</button>
+      <a id="rp-approve" target="_blank" rel="noopener" hidden>Open the approval page</a>
+    </div>
+
     <div class="card stack">
       <div class="spread"><h2>Where are you?</h2><span class="chip info">Simulated aisle beacon</span></div>
       <div class="aisles" id="aisles"></div>
@@ -69,14 +102,34 @@
       <video id="video" playsinline muted hidden></video>
       <p class="muted small" style="margin:0" id="scan-hint">Tap a product to scan its barcode.</p>
       <div class="products" id="products"></div>
-      <label class="small muted">Package check (demo control)
+      <div class="stack small" id="pkg-box" hidden>
+        <div class="spread"><b>Package check</b><span class="chip info" id="pkg-chip">runs on this phone</span></div>
+        <label class="button-like" id="pkg-label">Photo of the item, then scan
+          <input type="file" accept="image/*" capture="environment" id="pkg-photo" class="sr-only"></label>
+        <span class="muted" id="pkg-result">Checks that the package in your hand matches the barcode you scan. The photo stays on your phone.</span>
+      </div>
+      <details class="small muted"><summary>Demo override</summary>
         <select id="package" style="width:100%;margin-top:4px"></select>
-      </label>
+      </details>
     </div>
 
     <div class="card">
       <h2 style="margin-bottom:6px">Cart</h2>
       <div id="lines"><p class="muted small" style="margin:0">Nothing scanned yet.</p></div>
+      <div id="discounts" class="stack small" style="gap:2px;margin-top:8px"></div>
+      <div class="spread small muted" id="gst-line"></div>
+    </div>
+
+    <div class="card stack small">
+      <div id="offers-list" class="muted"></div>
+      <div class="row" style="gap:6px">
+        <input id="coupon" class="field" placeholder="Coupon code" autocomplete="off" aria-label="Coupon code" style="flex:1">
+        <button id="coupon-apply">Apply</button>
+      </div>
+      <div class="row" style="gap:6px" id="points-row" hidden>
+        <span id="points-text" style="flex:1"></span>
+        <button id="points-use">Use points</button>
+      </div>
     </div>
 
     <button class="primary" id="to-exit">Go to exit</button>
@@ -91,7 +144,9 @@
       <div class="spread"><span class="muted">Total</span><span class="big num" id="exit-total"></span></div>
       <div class="muted small" id="exit-items"></div>
     </div>
-    <button class="primary" id="tap">Or tap your phone at gate G1 (NFC)</button>
+    <button class="primary" id="nfc-btn" hidden>Tap your phone on the gate's NFC tag</button>
+    <p class="muted small" style="margin:0" id="nfc-hint">Or touch your phone to the NFC tag on the gate.</p>
+    <button id="tap">Demo: tap at gate G1 without NFC</button>
     <button id="resume">Back to shopping</button>
     <p class="muted small" style="margin:0" id="exit-status"></p>
   </section>
@@ -144,6 +199,9 @@
       <div id="receipt-lines"></div>
       <div class="spread"><span class="muted">Total charged</span><span class="big num" id="receipt-total"></span></div>
       <div class="muted small mono" id="receipt-ref"></div>
+      <div class="small" id="receipt-gst"></div>
+      <a class="button-like" id="receipt-invoice" target="_blank" rel="noopener" hidden>View GST invoice</a>
+      <div class="small muted" id="receipt-points"></div>
     </div>
     <div class="card stack dispute"></div>
     <button id="new-trip">Start a new trip</button>
@@ -152,6 +210,7 @@
 
 <script src="/static/common.js"></script>
 <script src="/static/sha256.js"></script>
+<script src="/static/package-check.js"></script>
 <script>
 const GATE = "G1";
 let shopper = TL.load("tl.shopper", null);      // { shopper_id, shopper_secret } issued by the server
@@ -189,11 +248,41 @@ function renderCart(cart) {
     <div class="line">
       <div><div>${TL.esc(ln.name)}</div>${ln.note ? `<div class="small muted">${TL.esc(ln.note)}</div>` : ""}</div>
       <div style="text-align:right"><div class="num">${ln.status === "weighing" ? "–" : TL.rupees(ln.price)}</div>
-        <span class="chip ${ln.status === "weighing" ? "info" : ln.status === "refunded" ? "removed" : ln.status}">${STATUS[ln.status]}</span></div>
+        <span class="chip ${ln.status === "weighing" ? "info" : ln.status === "refunded" ? "removed" : ln.status}">${ln.return_ts ? "Put it on the shelf" : STATUS[ln.status]}</span>
+        ${cart.state === "shopping" && !["removed", "refunded"].includes(ln.status) && !ln.return_ts
+          ? `<div><button class="ghost small" data-putback="${TL.esc(ln.line_id)}" aria-label="Put back ${TL.esc(ln.name)}">Put back</button></div>` : ""}</div>
     </div>`).join("") : `<p class="muted small" style="margin:0">Nothing scanned yet.</p>`;
   $("exit-total").textContent = TL.rupees(cart.total);
   $("exit-items").textContent = `${cart.items} item${cart.items === 1 ? "" : "s"}`;
+  $("discounts").innerHTML = (cart.discounts || []).map((d) =>
+    `<div class="spread"><span class="ok-text">${TL.esc(d.label)}</span><span class="num">-${TL.rupees(d.amount)}</span></div>`).join("");
+  const gst = cart.gst || { tax: 0 };
+  $("gst-line").textContent = cart.items ? `Includes GST ${TL.rupees(gst.tax)}` : "";
+  $("offers-list").textContent = cart.offers && cart.offers.length ? "Offers today: " + cart.offers.join(" · ") : "";
+  if (cart.coupon) {
+    $("coupon").value = cart.coupon.code;
+    $("coupon-apply").textContent = cart.coupon.applied ? "Applied ✓" : "Apply";
+    if (!cart.coupon.applied && cart.coupon.reason) $("offers-list").textContent = `${cart.coupon.code}: ${cart.coupon.reason}`;
+  }
+  const pts = cart.points;
+  $("points-row").hidden = !pts || pts.balance < pts.min_redeem;
+  if (pts) {
+    $("points-text").textContent = pts.redeemed ? `Using ${pts.redeemed} points (-${TL.rupees(pts.redeemed * pts.point_value_paise)})`
+      : `You have ${pts.balance} points (worth ${TL.rupees(pts.balance * pts.point_value_paise)})`;
+    $("points-use").textContent = pts.redeemed ? "Don't use" : "Use points";
+    $("points-use").dataset.redeemed = pts.redeemed;
+    $("points-use").dataset.balance = pts.balance;
+  }
 }
+
+$("coupon-apply").onclick = async () => {
+  try { renderCart((await trip("/coupon", { code: $("coupon").value.trim() })).data); }
+  catch (e) { TL.toast(e.message, "bad"); }
+};
+$("points-use").onclick = async () => {
+  const use = Number($("points-use").dataset.redeemed) ? 0 : Number($("points-use").dataset.balance);
+  try { renderCart((await trip("/points", { points: use })).data); } catch (e) { TL.toast(e.message, "bad"); }
+};
 
 function renderQueue() {
   $("queue-banner").hidden = !queue.length;
@@ -206,6 +295,7 @@ function renderNudges() {
       <div><b>Oops!</b> ${TL.esc(n.text)}</div>
       <div class="row">
         ${n.sku ? `<button class="primary small" data-scan="${TL.esc(n.sku)}">Scan it now</button>` : ""}
+        ${n.pick_id ? `<button class="small" data-notme="${TL.esc(n.pick_id)}">I didn't take it</button>` : ""}
         <button class="ghost small" data-dismiss="${TL.esc(key)}">Dismiss</button>
       </div>
     </div>`).join("");
@@ -220,6 +310,7 @@ function renderAisles() {
 function renderProducts() {
   $("products").innerHTML = catalog.map((p) => `
     <button data-barcode="${p.barcode}">
+      ${p.image ? `<img src="${p.image}" alt="" width="40" height="40">` : ""}
       <span>${TL.esc(p.name)}</span>
       <span class="small muted">${TL.rupees(p.price)}${p.sold_by === "weight" ? "/kg" : ""} · aisle ${p.aisle}${p.age_restricted ? " · ID" : ""}</span>
     </button>`).join("");
@@ -253,6 +344,7 @@ async function start() {
 
 function enterShop() {
   show("shop");
+  checkMandate();
   renderAisles();
   renderQueue();
   connect();
@@ -286,12 +378,43 @@ async function setAisle(aisle) {
   sendLocation();
 }
 
-function signScan(barcode, packageLabel) {
+function signScan(barcode, pkg) {
   S.seq += 1;
   persist();
   const ts = Date.now();
   return { seq: S.seq, barcode, ts, sig: TLCrypto.hmacHex(S.key, `${S.sid}|${S.seq}|${barcode}|${ts}`),
-           package_label: packageLabel, package_confidence: packageLabel ? 0.93 : null };
+           package_label: pkg ? pkg.label : null, package_confidence: pkg ? pkg.confidence : null };
+}
+
+// ---- Package check: the latest photo's result is attached to the next scan (within a minute).
+let pendingPackage = null;
+const serverPackageCheck = async (jpeg) => (await trip("/package-check", { image_b64: jpeg })).data;
+function showPackage(r) {
+  const p = catalog.find((x) => x.sku === r.label);
+  $("pkg-chip").textContent = r.where === "phone" ? "checked on this phone" : "checked by the store";
+  $("pkg-result").textContent = p ? `Looks like ${p.name} (${Math.round(r.confidence * 100)}%). Now scan its barcode.`
+    : "Couldn't see a product clearly. Try again, or just scan.";
+}
+$("pkg-photo").onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  $("pkg-result").textContent = "Checking…";
+  try {
+    const r = await TLPackage.classify(await TLPackage.imageFromFile(file), serverPackageCheck);
+    pendingPackage = { ...r, at: Date.now() };
+    showPackage(r);
+  } catch (err) { $("pkg-result").textContent = "Package check unavailable: " + err.message; }
+};
+function takePackage() {
+  if ($("package").value) {  // demo override: pretend the camera saw this product
+    const r = { label: $("package").value, confidence: 0.93 };
+    $("package").value = "";
+    return r;
+  }
+  const r = pendingPackage && Date.now() - pendingPackage.at < 60000 ? pendingPackage : null;
+  pendingPackage = null;
+  return r;
 }
 
 async function postScan(body) {
@@ -302,10 +425,8 @@ async function postScan(body) {
   return { status: res.status, data };
 }
 
-async function scan(barcode) {
-  const packageLabel = $("package").value || null;
-  $("package").value = "";
-  const body = signScan(barcode, packageLabel);
+async function scan(barcode, framePackage) {
+  const body = signScan(barcode, framePackage || takePackage());
   if (queue.length) { queue.push(body); persist(); renderQueue(); return flushQueue(); }  // keep the order
   try {
     const res = await postScan(body);
@@ -361,6 +482,45 @@ async function tap() {
   } catch (e) { $("exit-status").textContent = e.message; }
 }
 
+// ---------- NFC: the gate's NTAG 424 DNA tag gives a signed, single-use read (picc_data + cmac)
+async function nfcTap(picc, cmac) {
+  if (!S) return TL.toast("Start a trip first", "bad");
+  if (queue.length) await flushQueue();
+  try {
+    const { data } = await trip("/checkout", {});  // a fresh exit token for this tap
+    token = data.token;
+    $("qr").innerHTML = data.qr_svg;
+    show("exit");
+    $("exit-status").textContent = "Checking at the gate…";
+    const res = (await TL.api("/api/gate/nfc-tap", { token, picc_data: picc, cmac })).data;
+    $("exit-status").textContent = res.mode === "offline"
+      ? `Gate ${res.gate}: store is offline, the gate checked your signed token.` : `Tapped gate ${res.gate}.`;
+    refresh();  // the live update can race a page just opened from the tag
+  } catch (e) { $("exit-status").textContent = e.message; TL.toast(e.message, "bad"); }
+}
+function nfcFromUrl(url) {
+  try {
+    const q = new URL(url, location.origin).searchParams;
+    return q.get("picc_data") && q.get("cmac") ? [q.get("picc_data"), q.get("cmac")] : null;
+  } catch { return null; }
+}
+async function startWebNfc() {
+  try {
+    const reader = new NDEFReader();
+    await reader.scan();
+    $("nfc-hint").textContent = "Hold the top of your phone to the gate's NFC tag…";
+    reader.onreading = (ev) => {
+      for (const rec of ev.message.records) {
+        if (rec.recordType !== "url" && rec.recordType !== "absolute-url") continue;
+        const sun = nfcFromUrl(new TextDecoder().decode(rec.data));
+        if (sun) return nfcTap(...sun);
+      }
+      TL.toast("That NFC tag isn't a TrustLane gate", "bad");
+    };
+  } catch (e) { $("nfc-hint").textContent = "NFC unavailable: " + e.message; }
+}
+if ("NDEFReader" in window) { $("nfc-btn").hidden = false; $("nfc-btn").onclick = startWebNfc; }
+
 function showConfirm(items) {
   confirmItems = items;
   $("confirm-list").innerHTML = items.map((it) => `
@@ -391,6 +551,12 @@ function showReceipt(r) {
   const refunds = (r.refunds || []).reduce((sum, x) => sum + x.amount, 0);
   $("receipt-ref").textContent = [r.payment_id, r.provider, r.method, r.vpa, `${r.mode} mode`].filter(Boolean).join(" · ")
     + (refunds ? ` · refunded ${TL.rupees(refunds)}` : "");
+  const off = (r.discounts || []).reduce((sum, d) => sum + d.amount, 0);
+  $("receipt-gst").textContent = r.gst ? `${off ? `You saved ${TL.rupees(off)}. ` : ""}Includes GST ${TL.rupees(r.gst.tax)}`
+    + (r.gst.outside_gst ? ` (${TL.rupees(r.gst.outside_gst)} of items outside GST)` : "") : "";
+  if (r.invoice) { $("receipt-invoice").href = r.invoice.url; $("receipt-invoice").hidden = false;
+                   $("receipt-invoice").textContent = `View GST invoice ${r.invoice.number}`; }
+  $("receipt-points").textContent = r.points ? `+${r.points.earned} points · balance ${r.points.balance}` : "";
   show("receipt");
 }
 
@@ -473,7 +639,17 @@ async function startCamera() {
       if (video.hidden) return;
       const codes = await detector.detect(video).catch(() => []);
       const code = codes[0] && codes[0].rawValue;
-      if (code && code !== last) { last = code; scan(code); setTimeout(() => (last = ""), 2500); }
+      if (code && code !== last) {
+        last = code;
+        setTimeout(() => (last = ""), 2500);
+        // The camera already sees the package: check it on the phone in the same moment.
+        let pkg = null;
+        if (await TLPackage.available()) {
+          pkg = await TLPackage.classify(video).catch(() => null);
+          if (pkg) showPackage(pkg);
+        }
+        scan(code, pkg);
+      }
       requestAnimationFrame(loop);
     };
     loop();
@@ -488,6 +664,14 @@ document.addEventListener("click", (e) => {
   else if (t.dataset.barcode) scan(t.dataset.barcode);
   else if (t.dataset.scan) { const p = catalog.find((x) => x.sku === t.dataset.scan); if (p) scan(p.barcode); }
   else if (t.dataset.dismiss) { nudges.delete(t.dataset.dismiss); renderNudges(); }
+  else if (t.dataset.notme) {
+    trip(`/picks/${encodeURIComponent(t.dataset.notme)}/not-me`, {}).catch((e) => TL.toast(e.message, "bad"));
+    nudges.delete(t.dataset.notme); renderNudges();
+  }
+  else if (t.dataset.putback) {
+    trip(`/lines/${encodeURIComponent(t.dataset.putback)}/put-back`, {}).then(({ data }) => renderCart(data))
+      .catch((e) => TL.toast(e.message, "bad"));
+  }
 });
 $("consent").onchange = (e) => ($("start").disabled = !e.target.checked);
 $("start").onclick = () => start().catch((e) => TL.toast(e.message, "bad"));
@@ -504,10 +688,104 @@ if ("BarcodeDetector" in window && window.isSecureContext && navigator.mediaDevi
   $("scan-hint").textContent = "Tap a product, or use the camera to scan a real barcode.";
 }
 
+
+// ---- Account: phone sign-in (one-time code), receipts, points; DPDP access and erasure
+function acctMsg(text, bad) { $("acct-msg").textContent = text; $("acct-msg").style.color = bad ? "var(--red)" : ""; }
+async function loadAccount() {
+  if (!shopper) { $("account-state").textContent = "not signed in"; return; }
+  try {
+    const me = (await TL.api("/api/shoppers/me", shopper)).data;
+    const signedIn = !!me.phone;
+    $("account-state").textContent = signedIn ? `signed in · ${me.phone}` : "this phone only";
+    $("signin-box").hidden = signedIn;
+    $("profile-box").hidden = !signedIn;
+    $("acct-email").value = me.email || "";
+    $("acct-points").textContent = me.points;
+    $("acct-receipts").innerHTML = me.receipts.length ? me.receipts.map((r) =>
+      `<div class="spread"><span>${new Date(r.ts * 1000).toLocaleDateString()} · ${TL.esc(r.number)}</span><span class="num">${TL.rupees(r.total)}</span></div>`).join("")
+      : `<span class="muted">No receipts yet.</span>`;
+  } catch (e) { if (e.status === 401) { shopper = null; TL.save("tl.shopper", null); } }
+}
+$("acct-send").onclick = async () => {
+  try {
+    const { data } = await TL.api("/api/shoppers/otp/start", { phone: $("acct-phone").value });
+    acctMsg(`Code sent to ${data.sent_to}.`);
+    $("acct-code-row").hidden = $("acct-verify").hidden = false;
+    $("acct-code").focus();
+  } catch (e) { acctMsg(e.message, true); }
+};
+$("acct-verify").onclick = async () => {
+  try {
+    const { data } = await TL.api("/api/shoppers/otp/verify", { phone: $("acct-phone").value, code: $("acct-code").value, ...(shopper || {}) });
+    shopper = { shopper_id: data.shopper_id, shopper_secret: data.shopper_secret };
+    TL.save("tl.shopper", shopper);
+    acctMsg(data.new ? "Signed in. Your account is ready." : "Signed in. Welcome back!");
+    loadAccount();
+  } catch (e) { acctMsg(e.message, true); }
+};
+$("acct-save").onclick = async () => {
+  try {
+    const me = (await TL.api("/api/shoppers/me/profile", { ...shopper, email: $("acct-email").value })).data;
+    acctMsg(me.email && me.email_receipts ? "Saved. Invoices will be e-mailed to you." : "Saved. Your invoices are always under Receipts here.");
+  }
+  catch (e) { acctMsg(e.message, true); }
+};
+$("acct-export").onclick = async () => {
+  if (!shopper) return acctMsg("Nothing stored yet: start a trip or sign in first.");
+  const { data } = await TL.api("/api/shoppers/me/export", shopper);
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  Object.assign(document.createElement("a"), { href: url, download: "trustlane-my-data.json" }).click();
+};
+$("acct-delete").onclick = async () => {
+  if (!shopper) return acctMsg("There's no account on this phone.");
+  if (!window.confirm("Delete your account, points and personal data? Invoices are kept 72 months as GST law requires, but no longer linked to you.")) return;
+  try {
+    await TL.api("/api/shoppers/me/delete", { ...shopper, confirm: true });
+    shopper = null; TL.save("tl.shopper", null);
+    acctMsg("Your account and personal data are deleted.");
+    loadAccount();
+  } catch (e) { acctMsg(e.message, true); }
+};
+TL.api("/api/store").then(({ data }) => {
+  const g = data.grievance_officer || {};
+  $("grievance").textContent = `Questions or complaints about your data: ${g.name || "Grievance Officer"}, ${g.email || ""}. ${data.legal_name}.`;
+}).catch(() => {});
+loadAccount();
+
+// ---- UPI Reserve Pay: link once, then every exit is debited with no tap.
+let reservePay = false;
+async function checkMandate() {
+  if (!reservePay || !shopper) return;
+  try {
+    const { data } = await TL.api("/api/shoppers/mandate/status", shopper);
+    const active = data.status === "ACTIVE";
+    $("rp-card").hidden = false;
+    $("rp-chip").textContent = active ? "active" : data.status === "NONE" ? "not linked" : data.status.toLowerCase();
+    $("rp-chip").className = "chip " + (active ? "ok" : "warn");
+    $("rp-link").hidden = $("rp-upi").hidden = active || data.status === "PENDING";
+    if (active) $("rp-text").textContent = "Linked. You'll be charged automatically as you walk out.";
+    else if (data.status === "PENDING") $("rp-text").textContent = "Waiting for you to approve the block in your UPI app.";
+  } catch { /* status is best-effort */ }
+}
+$("rp-link").onclick = async () => {
+  $("rp-link").disabled = true;
+  try {
+    const { data } = await TL.api("/api/shoppers/mandate", { ...shopper, upi_id: $("rp-upi").value.trim() || null });
+    if (data.approve_url) { $("rp-approve").href = data.approve_url; $("rp-approve").hidden = false; }
+    await checkMandate();
+  } catch (err) { $("rp-text").textContent = "Couldn't link Reserve Pay: " + err.message; }
+  $("rp-link").disabled = false;
+};
+setInterval(checkMandate, 10000);
+
 (async () => {
   const cfg = (await TL.api("/api/config")).data;
   locationFreshS = cfg.location_fresh_s;
-  if (cfg.payments.provider === "razorpay") {
+  if (cfg.payments.flow === "mandate") {
+    reservePay = true;
+    $("pay-explainer").textContent = "Scan the QR code at the entrance to start. With UPI Reserve Pay linked, you're charged as you walk out.";
+    $("pay-mode").textContent = "Prototype: Cashfree Reserve Pay sandbox, no money moves.";
+  } else if (cfg.payments.provider === "razorpay") {
     $("pay-explainer").textContent = "Scan the QR code at the entrance to start. At the exit gate you approve one UPI payment.";
     $("pay-mode").textContent = "Prototype: Razorpay in test mode, no money moves.";
   } else {
@@ -515,9 +793,17 @@ if ("BarcodeDetector" in window && window.isSecureContext && navigator.mediaDevi
     $("pay-mode").textContent = "Prototype: built-in sandbox payments, no money moves.";
   }
   catalog = (await TL.api("/api/catalog")).data;
+  TLPackage.available().then((ok) => { $("pkg-box").hidden = !ok; });  // don't hold up the page
   renderProducts();
   renderDispute();
   if (S) enterShop(); else show("start");
+  // Opened from a gate's NFC tag (the tag's URL lands on /g, which redirects here).
+  const sun = nfcFromUrl(location.href);
+  if (sun) {
+    history.replaceState(null, "", "/phone");
+    if (S) nfcTap(...sun); else TL.toast("Start a trip first, then tap the gate again", "bad");
+  }
+  TL.api("/api/gate/status").then(({ data }) => { if (data.gate_key_required) $("tap").hidden = true; }).catch(() => {});
   setInterval(refresh, 4000);
   setInterval(sendLocation, 15000);   // keep the aisle fresh: a silent phone becomes a suspect
   setInterval(flushQueue, 5000);

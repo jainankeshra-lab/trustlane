@@ -45,7 +45,8 @@ def test_honest_located_shopper_is_not_pulled_in(client):
 
 
 def test_bluetooth_presence_beats_a_spoofed_aisle(client, app):
-    spoofer = Phone(client, aisle="3")  # claims aisle 3 ...
+    spoofer = Phone(client, aisle="3")  # claims aisle 3 (and has for a while: not just walking past) ...
+    app.state.engine.sessions[spoofer.sid].aisle_since -= 30
     client.post("/api/shelf/presence",  # ... but the aisle-7 shelf hears its rotating Bluetooth ID
                 json={"station_id": "st", "shelf_id": "S7-A", "eids": [eid_for(spoofer.key, time.time())]})
     shelf(client, lane=1)

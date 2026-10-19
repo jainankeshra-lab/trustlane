@@ -23,7 +23,7 @@
   </div>
   <div id="shelves" class="stack"></div>
   <div class="card stack">
-    <div class="spread"><h2>Events sent</h2><span class="small muted">Bluetooth panel needs the staff PIN</span></div>
+    <div class="spread"><h2>Events sent</h2><span class="small muted">Bluetooth panel needs a staff sign-in</span></div>
     <div class="log small" id="log"></div>
   </div>
 </main>
@@ -132,7 +132,7 @@ async function heartbeats() {
 
 async function loadPhones() {
   let next = [];
-  try { next = (await TL.staffApi("/api/ops/presence-sim")).data; } catch { /* no PIN yet */ }
+  try { next = (await TL.staffApi("/api/ops/presence-sim")).data; } catch { /* not signed in yet */ }
   const changed = JSON.stringify(next) !== JSON.stringify(phones);
   phones = next;
   if (changed) render();  // don't re-render (and close open menus) when nothing changed

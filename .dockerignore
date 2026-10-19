@@ -1,0 +1,17 @@
+.venv
+**/__pycache__
+.pytest_cache
+mobile
+models
+datasets
+runs
+logs
+*.pt
+.env
+data/*
+!data/catalog.json
+!data/promotions.json
+monitoring
+tests
+shelf_station
+.github

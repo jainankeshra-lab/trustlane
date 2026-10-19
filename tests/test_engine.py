@@ -6,7 +6,7 @@ from server.config import ROOT, Settings
 from server.engine import Engine, EngineError
 from server.ledger import Ledger
 from server.payments import SandboxPayments
-from server.security import TokenSigner, sign_scan, verify_token
+from server.security import TokenSigner, eid_for, sign_scan, verify_token
 
 BARCODE = {"razor": "8901000000011", "blades": "8901000000028", "chocolate": "8901000000035",
            "gum": "8901000000059", "milk": "8901000000066"}
@@ -263,3 +263,27 @@ def test_ledger_chain_detects_edits(engine):
     assert engine.ledger.verify_chain()
     engine.ledger._db.execute("UPDATE events SET payload='{}' WHERE id=2")
     assert not engine.ledger.verify_chain()
+
+
+def test_walking_to_another_aisle_is_not_spoofing(engine):
+    """A phone that just moved is still heard by the old aisle's shelf for a few seconds: no mismatch flag."""
+    sess, _, _ = engine.start_session(None, None, True, 0)
+    engine.set_location(sess.session_id, "7", 0)
+    engine.presence("st", "S7-A", [eid_for(sess.key, 1)], 1)
+    engine.set_location(sess.session_id, "3", 20)       # walks to aisle 3
+    engine.presence("st", "S7-A", [eid_for(sess.key, 22)], 22)  # aisle-7 shelf still catches it briefly
+    assert not any("reported aisle" in r for r in engine.assess(sess.session_id)["reasons"])
+
+
+def test_shared_pick_not_me_moves_it_to_the_others(engine):
+    a, _, _ = engine.start_session(None, None, True, 0)
+    b, _, _ = engine.start_session(None, None, True, 0)
+    for x in (a, b):
+        engine.set_location(x.session_id, "7", 0)
+    engine.shelf_event("st", "S7-A", "take", 1, lane=1)
+    pick = next(iter(engine.picks.values()))
+    assert sorted(pick.candidates) == sorted([a.session_id, b.session_id])
+    engine.not_me(a.session_id, pick.pick_id, 70)
+    assert pick.candidates == [b.session_id]
+    engine.not_me(b.session_id, pick.pick_id, 71)        # the last one left can't pass it on
+    assert pick.candidates == [b.session_id]

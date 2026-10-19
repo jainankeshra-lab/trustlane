@@ -1,0 +1,24 @@
+{
+  "key": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+  "scan": {
+    "args": [
+      "T3F9A0B1C2D",
+      7,
+      "8901000000011",
+      1792409254363
+    ],
+    "sig": "1d2f55a12ec367a36543ca3fc22939338bd7383595b752c9e2a0120818aa0e38"
+  },
+  "request": {
+    "args": [
+      "POST",
+      "/api/sessions/T3F9A0B1C2D/location",
+      1792409254363
+    ],
+    "header": "1792409254363.5b4f26f82898c71ac637443ab5265a3f875d7f3b135b3f4a45b3c6672b05368d"
+  },
+  "eid": {
+    "now_ms": 1792409254363,
+    "eid": "b0664f980eded6dd"
+  }
+}

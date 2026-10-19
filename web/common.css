@@ -5,12 +5,17 @@
   --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, "Segoe UI", Roboto, sans-serif; }
 h1, h2, h3 { margin: 0; line-height: 1.15; }
 h1 { font-size: 22px; } h2 { font-size: 17px; } h3 { font-size: 15px; }
 button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line); background: var(--card);
   color: var(--ink); padding: 9px 14px; }
 button:hover { border-color: var(--muted); }
+.button-like { display: block; text-align: center; cursor: pointer; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); padding: 9px 14px; font-weight: 600; }
+.button-like:hover { border-color: var(--muted); }
+.button-like:focus-within { outline: 3px solid var(--blue); outline-offset: 2px; }
 button:focus-visible, select:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 button.primary { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
 button.danger { background: var(--red); border-color: var(--red); color: #fff; }
@@ -39,3 +44,6 @@ th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line
 th { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .num { font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.field { font: inherit; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); min-width: 0; }
+.ok-text { color: var(--green); }

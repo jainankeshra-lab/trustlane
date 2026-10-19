@@ -228,3 +228,17 @@ def test_phone_offline_queue_replays_after_reaching_the_exit(tmp_path):
         p.post("/checkout")                       # phone reached the exit with a scan still queued
         assert p.scan(BC["milk"]).status_code == 409
         assert p.scan(BC["milk"], offline=True).status_code == 200  # flushed from the phone's signed log
+
+
+def test_finished_trips_leave_live_memory_but_stay_reachable(engine):
+    sess = trip(engine, "7", 0)
+    scan(engine, sess, "razor", 1)
+    exit_trip(engine, sess, 2)
+    assert sess.state == "exited"
+    assert engine.compact(100)["archived_trips"] == 0       # just finished: stays for an hour
+    assert engine.compact(4000)["archived_trips"] == 1
+    assert sess.session_id not in engine.sessions and not engine.picks
+    detail = engine.trip_detail(sess.session_id, 4001)         # staff open it: loaded back from the archive
+    assert detail["shopper_id"] == sess.shopper_id and engine.sessions[sess.session_id].receipt["total"] == 29900
+    assert sess.session_id in engine.sessions
+    assert any(t["session_id"] == sess.session_id for t in engine.trips_for(sess.shopper_id))

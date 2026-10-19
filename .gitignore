@@ -13,3 +13,18 @@ data/staff_pin.txt
 # Runtime data: audit ledger and the gate's private signing key
 data/ledger.sqlite3
 data/gate_signing_key.pem
+# Runtime secrets and state: staff accounts, NFC tag keys, edge outbox, gate agent state, TLS, audit photos
+data/staff.sqlite3
+data/staff_token_key
+data/nfc_tags.json
+data/nfc_counters.sqlite3
+data/edge/
+data/gate-*
+data/tls/
+data/audit/
+data/*.sqlite3
+data/beacon_key
+data/beacon_shelves.json
+data/beacon-*.json
+data/invoice_key
+data/store.json.local

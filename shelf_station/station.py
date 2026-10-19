@@ -13,10 +13,15 @@ and forwards the rotating Bluetooth IDs of phones the ESP32 hears nearby (presen
 Serial protocol from the firmware, one line each:
     W,<lane>,<grams>     weight reading
     B,<id>,<rssi>        Bluetooth ID heard from a shopper's phone
+and to it:
+    A,<shelf no><token>  the shelf token to broadcast now (rotates every 30 s); phones that hear it
+                         report it, which works even for iPhones in a pocket
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import sys
 import threading
@@ -92,8 +97,40 @@ class Transport:
         raise NotImplementedError
 
 
+# ---------------------------------------------------------------- shelf token broadcast
+BEACON_WINDOW_S = 30
+
+
+def beacon_token(shelf_key: bytes, now: float) -> str:
+    """Same as server.beacons.token_for: HMAC(shelf key, "beacon|" + 30 s window), first 4 bytes."""
+    return hmac.new(shelf_key, f"beacon|{int(now // BEACON_WINDOW_S)}".encode(), hashlib.sha256).hexdigest()[:8]
+
+
+def beacon_frame(config: dict, now: float) -> str:
+    return f"A,{config['shelf_no']:04x}{beacon_token(bytes.fromhex(config['key']), now)}"
+
+
+def beacon_config(server: str, key: str | None, shelf: str) -> dict | None:
+    """This shelf's number and token key, from the server (cached on disk for outages)."""
+    cache = ROOT / "data" / f"beacon-{shelf}.json"
+    req = urllib.request.Request(f"{server.rstrip('/')}/api/shelf/beacon?shelf_id={shelf}",
+                                 headers={"X-Station-Key": key} if key else {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            config = json.loads(resp.read())
+        cache.parent.mkdir(exist_ok=True)
+        cache.write_text(json.dumps(config))
+        return config
+    except (urllib.error.URLError, OSError, ValueError) as err:
+        if cache.exists():
+            return json.loads(cache.read_text())
+        print(f"Shelf token disabled: couldn't get this shelf's key ({err})")
+        return None
+
+
 class HttpTransport(Transport):
-    PATHS = {"events": "/api/shelf/events", "heartbeat": "/api/shelf/heartbeat", "presence": "/api/shelf/presence"}
+    PATHS = {"events": "/api/shelf/events", "heartbeat": "/api/shelf/heartbeat", "presence": "/api/shelf/presence",
+             "audit": "/api/vision/audit"}
 
     def __init__(self, base: str, key: str | None, outbox: Outbox):
         super().__init__(outbox)
@@ -207,6 +244,8 @@ def main() -> None:
                     help="recognise the whole frame instead of only around hands")
     ap.add_argument("--audit-dir", default=None,
                     help="save hand crops when camera and lane disagree, for review and retraining (kept 7 days)")
+    ap.add_argument("--audit-upload", action="store_true",
+                    help="also send those crops to the server's model review queue (ops console)")
     args = ap.parse_args()
 
     station_id = args.station_id or f"station-{args.shelf}"
@@ -234,7 +273,11 @@ def main() -> None:
             recognizer = None
             if args.model:
                 mapping = json.loads(open(args.classes, encoding="utf-8").read()) if args.classes else None
-                recognizer = ProductRecognizer(args.model, mapping, args.vision_conf)
+                model = args.model
+                if str(model).endswith(".hef"):  # compiled for the Hailo-8L accelerator
+                    from .hailo import HailoClassifier
+                    model = HailoClassifier(model)
+                recognizer = ProductRecognizer(model, mapping, args.vision_conf)
                 print(f"YOLO {recognizer.task} model {args.model}: classes {sorted(set(recognizer.names.values()))}")
             source = int(args.camera) if str(args.camera).isdigit() else args.camera
             camera = ShelfCamera(source, recognizer, show=args.show, use_hands=not args.no_hands)
@@ -245,13 +288,21 @@ def main() -> None:
             print(f"Camera skipped ({err}): pip install -r shelf_station/requirements-vision.txt", file=sys.stderr)
 
     def save_audit(lane_sku: str, seen_sku: str) -> None:
-        if not (audit_dir and camera is not None and camera.last_crop is not None
+        if not ((audit_dir or args.audit_upload) and camera is not None and camera.last_crop is not None
                 and time.time() - camera.last_crop_ts < 5):
             return
+        import base64
         import cv2
-        folder = audit_dir / time.strftime("%Y-%m-%d") / f"lane-{lane_sku}__camera-{seen_sku}"
-        folder.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(folder / f"{int(time.time() * 1000)}.jpg"), camera.last_crop)
+        if audit_dir:
+            folder = audit_dir / time.strftime("%Y-%m-%d") / f"lane-{lane_sku}__camera-{seen_sku}"
+            folder.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(folder / f"{int(time.time() * 1000)}.jpg"), camera.last_crop)
+        if args.audit_upload:
+            ok, jpg = cv2.imencode(".jpg", camera.last_crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if ok:
+                transport.send("audit", {"station_id": station_id, "shelf_id": args.shelf, "lane_sku": lane_sku,
+                                         "camera_sku": seen_sku, "ts": time.time(),
+                                         "jpeg_b64": base64.b64encode(jpg.tobytes()).decode()})
 
     def emit(lane: int, units: int, delta_g: float | None = None) -> None:
         kind = "take" if units > 0 else "return"
@@ -333,6 +384,18 @@ def main() -> None:
 
     with serial.Serial(args.serial, args.baud, timeout=1) as port:
         print(f"Reading load cells on {args.serial}")
+        beacon = beacon_config(args.server, args.key, args.shelf)
+
+        def beacon_loop() -> None:
+            sent = None
+            while beacon:
+                frame = beacon_frame(beacon, time.time())
+                if frame != sent:
+                    port.write((frame + "\n").encode())
+                    sent = frame
+                time.sleep(1)
+
+        threading.Thread(target=beacon_loop, daemon=True).start()
         while True:
             raw = port.readline().decode(errors="ignore").strip()
             try:

@@ -1,0 +1,233 @@
+{
+  "current": {
+    "green_max": 25.0,
+    "amber_max": 60.0,
+    "aisles_with_shelves": 16,
+    "picks_shared": 0.6222,
+    "trips": 1500,
+    "honest": 1356,
+    "thieves": 144,
+    "concurrent_shoppers": {
+      "median": 15.0,
+      "max": 25
+    },
+    "honest_green": 0.9004,
+    "honest_amber": 0.0671,
+    "honest_red": 0.0324,
+    "forgetful_green": 0.8219,
+    "honest_overcharged": 11,
+    "theft_caught": 0.6042,
+    "theft_loss_rupees": 20929.0,
+    "thieves_red": 0.4097,
+    "honest_red_reasons": [
+      [
+        "Nudged to scan Infant formula # g",
+        12
+      ],
+      [
+        "Nudged to scan Razor blades, pack of #",
+        11
+      ],
+      [
+        "Nudged to scan #-blade razor",
+        9
+      ],
+      [
+        "Razor blades, pack of # taken from shelf S#D but not scanned, nudge ignored",
+        7
+      ]
+    ],
+    "honest_amber_reasons": [
+      [
+        "Nudged to scan Silk chocolate # g",
+        8
+      ],
+      [
+        "#-blade razor taken from shelf S#D but not scanned, nudge ignored",
+        8
+      ],
+      [
+        "Silk chocolate # g taken from shelf S#C but not scanned, nudge ignored",
+        7
+      ],
+      [
+        "Silk chocolate # g taken from shelf S#D but not scanned, nudge ignored",
+        7
+      ]
+    ]
+  },
+  "sweep": [],
+  "layouts": [
+    {
+      "green_max": 25.0,
+      "amber_max": 60.0,
+      "aisles_with_shelves": 4,
+      "picks_shared": 0.915,
+      "trips": 1500,
+      "honest": 1356,
+      "thieves": 144,
+      "concurrent_shoppers": {
+        "median": 15.0,
+        "max": 26
+      },
+      "honest_green": 0.9019,
+      "honest_amber": 0.0701,
+      "honest_red": 0.028,
+      "forgetful_green": 0.8527,
+      "honest_overcharged": 27,
+      "theft_caught": 0.3194,
+      "theft_loss_rupees": 41995.0,
+      "thieves_red": 0.1875,
+      "honest_red_reasons": [
+        [
+          "Infant formula # g taken from shelf S#-A but not scanned, nudge ignored",
+          19
+        ],
+        [
+          "#-blade razor taken from shelf S#-A but not scanned, nudge ignored",
+          16
+        ],
+        [
+          "#-blade razor taken from shelf S#-A but not scanned (shared with # other shopper)",
+          14
+        ],
+        [
+          "Razor blades, pack of # taken from shelf S#-A but not scanned (shared with # other shopper",
+          9
+        ]
+      ],
+      "honest_amber_reasons": [
+        [
+          "#-blade razor taken from shelf S#-A but not scanned, nudge ignored (shared with # other sh",
+          25
+        ],
+        [
+          "Razor blades, pack of # taken from shelf S#-A but not scanned, nudge ignored (shared with ",
+          19
+        ],
+        [
+          "Razor blades, pack of # taken from shelf S#-A but not scanned, nudge ignored",
+          17
+        ],
+        [
+          "Razor blades, pack of # taken from shelf S#-A but not scanned (shared with # other shopper",
+          17
+        ]
+      ]
+    },
+    {
+      "green_max": 25.0,
+      "amber_max": 60.0,
+      "aisles_with_shelves": 8,
+      "picks_shared": 0.8015,
+      "trips": 1500,
+      "honest": 1356,
+      "thieves": 144,
+      "concurrent_shoppers": {
+        "median": 15.0,
+        "max": 27
+      },
+      "honest_green": 0.8864,
+      "honest_amber": 0.0796,
+      "honest_red": 0.0339,
+      "forgetful_green": 0.8459,
+      "honest_overcharged": 22,
+      "theft_caught": 0.4236,
+      "theft_loss_rupees": 34477.0,
+      "thieves_red": 0.2639,
+      "honest_red_reasons": [
+        [
+          "Nudged to scan Infant formula # g",
+          14
+        ],
+        [
+          "#-blade razor taken from shelf S#B but not scanned, nudge ignored",
+          11
+        ],
+        [
+          "Razor blades, pack of # taken from shelf S#B but not scanned, nudge ignored",
+          10
+        ],
+        [
+          "#-blade razor taken from shelf S#B but not scanned (shared with # other shopper)",
+          10
+        ]
+      ],
+      "honest_amber_reasons": [
+        [
+          "Silk chocolate # g taken from shelf S#A but not scanned, nudge ignored",
+          13
+        ],
+        [
+          "#-blade razor taken from shelf S#A but not scanned, nudge ignored",
+          13
+        ],
+        [
+          "Razor blades, pack of # taken from shelf S#B but not scanned, nudge ignored (shared with #",
+          10
+        ],
+        [
+          "Razor blades, pack of # taken from shelf S#A but not scanned, nudge ignored",
+          10
+        ]
+      ]
+    },
+    {
+      "green_max": 25.0,
+      "amber_max": 60.0,
+      "aisles_with_shelves": 16,
+      "picks_shared": 0.6222,
+      "trips": 1500,
+      "honest": 1356,
+      "thieves": 144,
+      "concurrent_shoppers": {
+        "median": 15.0,
+        "max": 25
+      },
+      "honest_green": 0.9004,
+      "honest_amber": 0.0671,
+      "honest_red": 0.0324,
+      "forgetful_green": 0.8219,
+      "honest_overcharged": 11,
+      "theft_caught": 0.6042,
+      "theft_loss_rupees": 20929.0,
+      "thieves_red": 0.4097,
+      "honest_red_reasons": [
+        [
+          "Nudged to scan Infant formula # g",
+          12
+        ],
+        [
+          "Nudged to scan Razor blades, pack of #",
+          11
+        ],
+        [
+          "Nudged to scan #-blade razor",
+          9
+        ],
+        [
+          "Razor blades, pack of # taken from shelf S#D but not scanned, nudge ignored",
+          7
+        ]
+      ],
+      "honest_amber_reasons": [
+        [
+          "Nudged to scan Silk chocolate # g",
+          8
+        ],
+        [
+          "#-blade razor taken from shelf S#D but not scanned, nudge ignored",
+          8
+        ],
+        [
+          "Silk chocolate # g taken from shelf S#C but not scanned, nudge ignored",
+          7
+        ],
+        [
+          "Silk chocolate # g taken from shelf S#D but not scanned, nudge ignored",
+          7
+        ]
+      ]
+    }
+  ]
+}

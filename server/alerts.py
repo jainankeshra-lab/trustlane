@@ -15,11 +15,13 @@ PAGE_LEVELS = {"warn", "bad"}
 
 class AlertNotifier:
     def __init__(self, slack_webhook: str = "", alert_webhook: str = "", ledger=None,
-                 client: httpx.AsyncClient | None = None):
+                 client: httpx.AsyncClient | None = None, sms: dict | None = None):
+        """sms: {"sid", "token", "from", "to": [numbers]} for Twilio; only "bad" alerts are texted."""
         self.slack_webhook = slack_webhook
         self.alert_webhook = alert_webhook
         self.ledger = ledger
         self.client = client
+        self.sms = sms if sms and sms.get("sid") and sms.get("token") and sms.get("to") else None
         self.active: dict[str, dict] = {}
         self.sent: list[dict] = []  # what was delivered, for the ops console and tests
 
@@ -43,16 +45,21 @@ class AlertNotifier:
         del self.sent[:-100]
         targets = []
         if self.slack_webhook:
-            targets.append((self.slack_webhook, {"text": text}))
+            targets.append((self.slack_webhook, {"json": {"text": text}}))
         if self.alert_webhook:
-            targets.append((self.alert_webhook, {"source": "trustlane", "ts": now, **event}))
+            targets.append((self.alert_webhook, {"json": {"source": "trustlane", "ts": now, **event}}))
+        if self.sms and event["level"] == "bad":  # on-call SMS for the serious ones only
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{self.sms['sid']}/Messages.json"
+            for number in self.sms["to"]:
+                targets.append((url, {"data": {"From": self.sms["from"], "To": number, "Body": text[:300]},
+                                      "auth": (self.sms["sid"], self.sms["token"])}))
         if not targets:
             return
         client = self.client or httpx.AsyncClient(timeout=5)
         try:
-            for url, body in targets:
+            for url, kwargs in targets:
                 try:
-                    await client.post(url, json=body)
+                    await client.post(url, **kwargs)
                 except httpx.HTTPError as err:
                     log.error("Alert delivery to %s failed: %s", url, err)
         finally:

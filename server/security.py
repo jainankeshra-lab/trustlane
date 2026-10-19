@@ -113,14 +113,15 @@ class TokenSigner:
         return f"{body}.{_b64e(self._key.sign(body.encode()))}"
 
 
-def verify_token(token: str, public_key: Ed25519PublicKey, now: float) -> dict:
+def verify_token(token: str, public_key: Ed25519PublicKey, now: float, grace_s: float = 0) -> dict:
+    """grace_s: accept a token up to this long past expiry (a gate syncing exits it let through offline)."""
     try:
         body, sig = token.split(".")
         public_key.verify(_b64d(sig), body.encode())
         payload = json.loads(_b64d(body))
     except (ValueError, InvalidSignature) as exc:
         raise TokenError("token signature is not valid") from exc
-    if now > payload.get("exp", 0):
+    if now > payload.get("exp", 0) + grace_s:
         raise TokenError("token has expired")
     return payload
 

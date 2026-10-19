@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrustLane · Pay</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  main { max-width: 420px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <span class="eyebrow">Gate check passed</span>
+  <h1 id="amount">Approve your payment</h1>
+  <p class="small" style="margin:0;background:var(--blue-soft);padding:10px 12px;border-radius:10px">
+    <b>Test mode:</b> choose UPI and enter <span class="mono">success@razorpay</span>. No money moves.</p>
+  <button class="primary" id="pay">Pay with UPI</button>
+  <p class="muted small" id="status"></p>
+</main>
+<script src="/static/common.js"></script>
+<script>
+// Opened by the native app in a WebView: /checkout?key=..&order_id=..&amount=..&name=..&sid=..
+// The result goes back to the app, which confirms it with the server using its own trip key.
+const q = Object.fromEntries(new URLSearchParams(location.search));
+const $ = (id) => document.getElementById(id);
+const tell = (msg) => { if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(msg)); };
+$("amount").textContent = `Pay ${TL.rupees(parseInt(q.amount || "0", 10))}`;
+
+function open() {
+  const rzp = new Razorpay({
+    key: q.key, order_id: q.order_id, amount: q.amount, currency: "INR", name: q.name || "TrustLane store",
+    description: `Trip ${q.sid}`, theme: { color: "#17765A" },
+    handler: (resp) => { $("status").textContent = "Confirming…"; tell({ type: "success", ...resp }); },
+    modal: { ondismiss: () => { $("status").textContent = "Payment not finished."; tell({ type: "dismissed" }); } },
+  });
+  rzp.on("payment.failed", (r) => { $("status").textContent = r.error.description; tell({ type: "failed", reason: r.error.description }); });
+  rzp.open();
+}
+const s = document.createElement("script");
+s.src = "https://checkout.razorpay.com/v1/checkout.js";
+s.onload = open;
+s.onerror = () => { $("status").textContent = "Couldn't load the payment page. Check the internet connection."; tell({ type: "failed", reason: "offline" }); };
+document.head.appendChild(s);
+$("pay").onclick = () => (window.Razorpay ? open() : null);
+</script>
+</body>
+</html>

@@ -144,3 +144,27 @@ def test_unsure_camera_is_ignored_and_agreement_rate_is_monitored(engine):
     vision = engine.summary(30, True)["vision"]
     assert vision["low_confidence"] == 1 and vision["agree"] == 9 and vision["disagree"] == 2
     assert any("Camera and weight disagree" in a["text"] for a in engine.summary(30, True)["alerts"])
+
+
+def test_hailo_classifier_plugs_into_the_recognizer(tmp_path):
+    """The Hailo backend (HEF on the Pi's accelerator) behaves like an Ultralytics classify model."""
+    import json
+
+    from shelf_station.hailo import HailoClassifier, softmax_if_needed, square_rgb
+    from shelf_station.vision import ProductRecognizer
+
+    seen = []
+
+    def fake_hailo(batch):  # uint8 NHWC in, raw scores out (as a HEF without the final softmax gives)
+        seen.append(batch.shape)
+        return np.array([[0.1, 4.0, 0.2]] * len(batch))
+
+    (tmp_path / "m.names.json").write_text(json.dumps(["razor", "blades", "empty"]))
+    clf = HailoClassifier(tmp_path / "m.hef", runner=fake_hailo, size=32)
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    found = ProductRecognizer(clf, min_confidence=0.5).recognize(frame)
+    assert found and found[0][0] == "blades" and found[0][1] > 0.9
+    assert seen == [(1, 32, 32, 3)]
+    assert square_rgb(np.zeros((10, 30, 3), np.uint8), 8).shape == (8, 8, 3)
+    probs = np.array([0.2, 0.7, 0.1])
+    assert np.allclose(softmax_if_needed(probs), probs)  # already probabilities: left alone

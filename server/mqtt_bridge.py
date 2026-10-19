@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 log = logging.getLogger("trustlane.mqtt")
 TOPIC = "trustlane/shelf/+/+"
-KINDS = {"events", "heartbeat", "presence"}
+KINDS = {"events", "heartbeat", "presence", "audit"}
 
 
 def parse_message(topic: str, payload: bytes) -> tuple[str, dict] | None:

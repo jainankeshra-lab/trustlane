@@ -1,0 +1,84 @@
+# Runs on every push and pull request: server tests, mobile app checks, both ESP32 firmwares,
+# and the Docker image (built and smoke-tested).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server tests (Python)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - uses: actions/setup-node@v4   # one test checks the phone's JavaScript HMAC against the server
+        with:
+          node-version: "22"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+      - name: Accuracy simulation (fails if the decision rules regress)
+        run: python -m tools.simulate --trips 3000 --check
+
+  mobile:
+    name: Mobile app (Expo)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:screens
+      - run: npx expo-doctor
+      - run: npx expo export --platform android --output-dir /tmp/bundle
+
+  firmware:
+    name: ESP32 firmware
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install the ESP32 core and HX711 library
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@2.0.17
+          arduino-cli lib install "HX711@0.6.5"
+      - run: arduino-cli compile --fqbn esp32:esp32:esp32 shelf_station/firmware/esp32_hx711
+      - run: arduino-cli compile --fqbn esp32:esp32:esp32 shelf_station/firmware/esp32_gate
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    needs: server
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t trustlane-server:ci .
+      - name: Smoke test
+        run: |
+          docker run -d --name tl -p 8000:8000 trustlane-server:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/config && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8000/api/store | grep -q gstin
+          curl -fsS -o /dev/null http://127.0.0.1:8000/phone
+          docker logs tl | tail -20

@@ -1,0 +1,6 @@
+# Tests (CI installs this)
+-r requirements.txt
+pytest>=8
+amqtt>=0.11                  # in-process MQTT broker for the MQTT end-to-end test
+onnx>=1.16                   # builds a tiny model for the package-check tests
+opencv-python-headless>=4.9  # Hailo backend framing test

@@ -1,11 +1,12 @@
+# Server (cloud and store edge). Shelf station, gate agent and camera extras have their own files.
 fastapi>=0.110
 uvicorn[standard]>=0.29
 prometheus-client>=0.20
 cryptography>=42
 httpx>=0.27
-segno>=1.6          # exit QR codes
-paho-mqtt>=2.0      # MQTT bridge (only used when TRUSTLANE_MQTT_URL is set)
-
-# tests
-pytest>=8
-amqtt>=0.11         # in-process MQTT broker for the MQTT end-to-end test
+segno>=1.6            # exit QR codes
+onnxruntime>=1.18     # package check model (served to phones; server-side fallback)
+numpy>=1.26
+pillow>=10
+paho-mqtt>=2.0        # MQTT bridge (only used when TRUSTLANE_MQTT_URL is set)
+websockets>=12        # store edge: relays gate decisions from the cloud
